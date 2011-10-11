@@ -2,6 +2,8 @@
 
 It keeps the things running at the right intervals. But different than cron.
 
+Janitor is built on NodeJS.
+
 With Janitor, you can schedule commands to run at specific intervals (eg,
 every 30 seconds). You can also schedule commands to run after other
 commands have completed.
