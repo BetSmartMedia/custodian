@@ -12,39 +12,54 @@
  * Janitor also provides basic watchdog functionality. If a process is not
  * running, it will be restarted.
  *
- * This code works on NodeJS 0.4.18.
+ * This code works on NodeJS 0.4.12.
  *
  * TODO: use nodules for hot-loading config?
  * TODO: use forever/daemon
+ * TODO: move lib/* into proper npm dependencies
+ * TODO: docs
  */
 
 var sys     = require("sys");
 var cproc   = require("child_process");
+var fs      = require("fs");
 var mailer  = require("./lib/node-mailer");
 var ext     = require("./lib/node-ext");
 
-var VERSION = '1.1.4';
-
-var hostname = '';
-cproc.exec('hostname -f', function(err, stdout, stderr){
-	hostname = stdout;
-});
+var VERSION = '1.2.0';
+var HOSTNAME = require('os').hostname();
 
 // load config
-var C;
-var name = process.argv[2] ? process.argv[2] : './config';
-var C = require(name);
-var CONFIG      = C.config
-var ADMIN_EMAIL = C.admin_email;
+if(process.argv.length < 3) {
+	console.error("Usage: node janitor.js <config_file>");
+	process.exit(1);
+}
+try {
+	var c = fs.readFileSync(process.argv[2], "utf8");
+	var CONFIG = JSON.parse(c);
+} catch(e) {
+	console.error("Error reading config:", e.message);
+	process.exit(1);
+}
 
 // init state
 STATE = {schedule:{}, watch:{}};
 for(var x in CONFIG.schedule) STATE.schedule[x] = {running: false, last_run: new Date("1980/01/01 00:00:00")};
 for(var x in CONFIG.watch)    STATE.watch[x]    = {pid: 0, last_restart: 0};
 
+// open log
+var log_fd = null;
+if(CONFIG.log) {
+	log_fd = fs.openSync(CONFIG.log, 'a', 0644);
+}
+
 function log(str) {
 	var now = new Date().format("yyyy-mm-dd HH:MM:ss");
-	sys.puts("[" + now + "] " + str);
+	var msg = "[" + now + "] " + str;
+	console.log(str);
+	// use sync for simplicity -- it's unsafe to have multiple write() calls
+	// out to the same FD
+	if(log_fd) fs.writeSync(log_fd, str + "\n");
 }
 
 /**
@@ -64,17 +79,31 @@ function watch_jobs() {
 		chkpid(STATE.watch[x].pid, function(is_running){
 			if(is_running) return;
 
-			sys.puts(x+" is not running, restarting");
-			var c = cproc.spawn(CONFIG.watch[x].cmd);
+			if(STATE.watch[x].output_fd) fs.closeSync(STATE.watch[x].output_fd);
+
+			log(x+" is not running, restarting");
+			var opts = {};
+			if(CONFIG.watch[x].output) {
+				// redirect stdout/stderr into the file specified
+				// file will be opened in append mode
+				var fd = fs.openSync(CONFIG.watch[x].output, 'a', 0644);
+				if(fd < 1) {
+					console.error("Error opening output file: " + CONFIG.watch[x].output);
+				} else {
+					opts.customFds = [-1, fd, fd];
+					STATE.watch[x].output_fd = fd;
+				}
+			}
+			var c = cproc.spawn(CONFIG.watch[x].cmd, [], opts);
 			STATE.watch[x].pid = c.pid;
-			sys.puts("   pid: "+c.pid);
+			log("   pid: "+c.pid);
 
 			if(CONFIG.watch[x].notify) {
-				mailer.send({
-					to:      ADMIN_EMAIL,
-					from:    ADMIN_EMAIL,
-					subject: 'BSM | Janitor',
-					body:    "Hostname: "+hostname+"\n\nProcess restarted: "+x+" (pid:"+c.pid+")\n"
+				new mailer.Mail({
+					to:      CONFIG.email,
+					from:    CONFIG.email,
+					subject: 'Janitor | Process Restarted',
+					body:    "Hostname: "+HOSTNAME+"\n\nProcess restarted: "+x+" (pid:"+c.pid+")\n"
 				});
 			}
 		});
@@ -91,38 +120,42 @@ function watch_jobs() {
 function run_job(x) {
 	var state = STATE.schedule[x],
 	    cfg   = CONFIG.schedule[x];
-	if(state.running) return sys.puts("... "+x+" is still running, skipping");
+	if(state.running) return console.log("... "+x+" is still running, skipping");
 
 	var cmd = cfg.cmd;
 	if(cfg.args) cfg.args.forEach(function(it){
 		switch(it) {
 			case 'last_run': cmd += ' "' + state.last_run.format("yyyy-mm-dd HH:MM:ss") + '"'; break;
-			default:         sys.puts("Unrecognized dyn arg: "+it);
+			default:         console.log("Unrecognized dyn arg: "+it);
 		}
 	});
 	STATE.schedule[x].running = true;
 	STATE.schedule[x].last_run = new Date();
+
 	log("exec " + x + ": " + cmd);
-	cproc.exec(cmd, {env: {IN_JANITOR:1}}, function(err, stdout, stderr){
+	var opts = {
+		env:       { env: {IN_JANITOR: 1}},
+		maxBuffer: 10*1024*1024 // 10MB
+	};
+	cproc.exec(cmd, opts, function(err, stdout, stderr){
 		STATE.schedule[x].running = false;
 		if(err) {
-			mailer.send({
-				to:      ADMIN_EMAIL,
-				from:    ADMIN_EMAIL,
-				subject: 'BSM | Janitor',
-				body:    "Command returned an error.\n\nError: "+err+"\n\nHostname: "+hostname+"\nCommand: "+CONFIG.schedule[x].cmd+"\n\n"+sys.inspect(arguments)
+			new mailer.Mail({
+				to:      CONFIG.admin_email,
+				from:    CONFIG.admin_email,
+				subject: 'Janitor | Command Error',
+				body:    "Command returned an error.\n\nError: "+err+"\n\nHostname: "+HOSTNAME+"\nCommand: "+CONFIG.schedule[x].cmd+"\n\n"+sys.inspect(arguments)
 			});
-			sys.puts(x+": Gadzooks! Error!");
-			sys.puts(sys.inspect(arguments));
+			console.log(x+": Gadzooks! Error!");
+			console.dir(arguments);
 		} else {
 			log(x+": finished");
-			//process.stdio.write(stdout);
 			if(stderr) {
-				mailer.send({
-					to:      ADMIN_EMAIL,
-					from:    ADMIN_EMAIL,
-					subject: 'BSM | Janitor',
-					body:    "Command returned some output on stderr.\n\nHostname: "+hostname+"\nCommand: "+CONFIG.schedule[x].cmd+"\n\n"+stderr
+				new mailer.Mail({
+					to:      CONFIG.admin_email,
+					from:    CONFIG.admin_email,
+					subject: 'BSM | Command Error',
+					body:    "Command returned some output on stderr.\n\nHostname: "+HOSTNAME+"\nCommand: "+CONFIG.schedule[x].cmd+"\n\n"+stderr
 				});
 			}
 		}
@@ -163,6 +196,6 @@ function dispatch() {
 	watch_jobs();
 }
 
-sys.puts("Janitor v"+VERSION+" starting...");
+log("Janitor v"+VERSION+" starting...");
 dispatch();
 setInterval(dispatch, 5000);  // every 5 seconds
