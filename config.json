@@ -1,0 +1,15 @@
+{
+	"email": "admin@example.com",
+
+	"log": "janitor.log",
+
+	"schedule": {
+		"job1": {"cmd":"test/job1.sh", "args":["last_run"], "when":"every 2s"},
+		"job2": {"cmd":"test/job2.sh", "args":["last_run"], "when":"after job1"},
+		"job3": {"cmd":"test/job3.sh", "args":["last_run"], "when":"after job1"}
+	},
+
+	"watch": {
+		"watch1": {"cmd":"test/job1.sh", "notify":false, "output":"watch1.log"}
+	}
+}
