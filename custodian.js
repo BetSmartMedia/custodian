@@ -1,15 +1,16 @@
+#!/usr/bin/env node
 /**
- * Janitor
+ * Custodian
  *
  * Copyright (C) 2011 Bet Smart Media <http://www.betsmartmedia.com>
  *
  * It keeps the things running at the right intervals. But different than cron.
  *
- * With Janitor, you can schedule commands to run at specific intervals (eg,
+ * With Custodian, you can schedule commands to run at specific intervals (eg,
  * every 30 seconds). You can also schedule commands to run after other
  * commands have completed.
  *
- * Janitor also provides basic watchdog functionality. If a process is not
+ * Custodian also provides basic watchdog functionality. If a process is not
  * running, it will be restarted.
  *
  * This code works on NodeJS 0.4.12.
@@ -31,7 +32,7 @@ var HOSTNAME = require('os').hostname();
  * Read and parse config
  */
 if(process.argv.length < 3) {
-	console.error("Usage: node janitor.js <config_file>");
+	console.error("Usage: node custodian.js <config_file>");
 	process.exit(1);
 }
 try {
@@ -138,7 +139,7 @@ function run()
 					new mailer.Mail({
 						to:      CONFIG.email,
 						from:    CONFIG.email,
-						subject: 'Janitor | Process Restarted',
+						subject: 'Custodian | Process Restarted',
 						body:    "Hostname: "+HOSTNAME+"\n\nProcess restarted: "+x+" (pid:"+c.pid+")\n"
 					});
 				}
@@ -179,7 +180,7 @@ function run()
 				new mailer.Mail({
 					to:      CONFIG.admin_email,
 					from:    CONFIG.admin_email,
-					subject: 'Janitor | Command Error',
+					subject: 'Custodian | Command Error',
 					body:    "Command returned an error.\n\nError: "+err+"\n\nHostname: "+HOSTNAME+"\nCommand: "+CONFIG.schedule[x].cmd+"\n\n"+sys.inspect(arguments)
 				});
 				console.log(x+": Gadzooks! Error!");
@@ -232,7 +233,7 @@ function run()
 		watch_jobs();
 	}
 
-	log("Janitor v"+VERSION+" starting...");
+	log("Custodian v"+VERSION+" starting...");
 	dispatch();
 	setInterval(dispatch, 5000);  // every 5 seconds
 }

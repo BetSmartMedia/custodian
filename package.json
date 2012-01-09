@@ -1,6 +1,6 @@
 {
   "author": "Judd Vinet <judd@betsmartmedia.com>",
-  "name": "janitor",
+  "name": "custodian",
   "description": "A different sort of cron",
   "version": "1.2.0",
   "engines": {
