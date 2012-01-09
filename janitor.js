@@ -15,7 +15,6 @@
  * This code works on NodeJS 0.4.12.
  *
  * TODO: use nodules for hot-loading config?
- * TODO: docs
  */
 
 var sys        = require("sys");
