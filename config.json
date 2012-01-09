@@ -1,7 +1,9 @@
 {
 	"email": "admin@example.com",
 
+	"daemon": false,
 	"log": "janitor.log",
+	"pid": "janitor.pid",
 
 	"schedule": {
 		"job1": {"cmd":"test/job1.sh", "args":["last_run"], "when":"every 2s"},
