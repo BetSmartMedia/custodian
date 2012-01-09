@@ -15,7 +15,6 @@
  * This code works on NodeJS 0.4.12.
  *
  * TODO: use nodules for hot-loading config?
- * TODO: use forever/daemon
  * TODO: docs
  */
 
@@ -29,7 +28,9 @@ var dateFormat = require("dateformat");
 var VERSION = '1.2.0';
 var HOSTNAME = require('os').hostname();
 
-// load config
+/**
+ * Read and parse config
+ */
 if(process.argv.length < 3) {
 	console.error("Usage: node janitor.js <config_file>");
 	process.exit(1);
@@ -42,6 +43,9 @@ try {
 	process.exit(1);
 }
 
+/**
+ * Run as a daemon or as a regular process
+ */
 if(CONFIG.daemon) {
 	// become a daemon
 	['log','pid'].map(function(d) {
@@ -70,6 +74,9 @@ if(CONFIG.daemon) {
 	run();
 }
 
+/**
+ * Main mojo
+ */
 function run()
 {
 	// init state
