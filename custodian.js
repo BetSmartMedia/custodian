@@ -13,19 +13,19 @@
  * Custodian also provides basic watchdog functionality. If a process is not
  * running, it will be restarted.
  *
- * This code works on NodeJS 0.4.12.
+ * This code works on NodeJS 0.6.7.
  *
  * TODO: use nodules for hot-loading config?
  */
 
-var sys        = require("sys");
+var util       = require("util");
 var cproc      = require("child_process");
 var fs         = require("fs");
 var mailer     = require("node-mailer");
 var daemon     = require("daemon");
 var dateFormat = require("dateformat");
 
-var VERSION = '1.2.0';
+var VERSION = '1.2.1';
 var HOSTNAME = require('os').hostname();
 
 /**
@@ -84,19 +84,10 @@ function run()
 	for(var x in CONFIG.schedule) STATE.schedule[x] = {running: false, last_run: new Date("1980/01/01 00:00:00")};
 	for(var x in CONFIG.watch)    STATE.watch[x]    = {pid: 0, last_restart: 0};
 
-	// open log
-	/*var log_fd = null;
-	if(CONFIG.log) {
-		log_fd = fs.openSync(CONFIG.log, 'a', 0644);
-	}*/
-
 	function log(str) {
 		var now = dateFormat(new Date, "yyyy-mm-dd HH:MM:ss");
 		var msg = "[" + now + "] " + str;
 		console.log(msg);
-		// use sync for simplicity -- it's unsafe to have multiple write() calls
-		// out to the same FD
-		//if(log_fd) fs.writeSync(log_fd, msg + "\n");
 	}
 
 	/**
@@ -119,7 +110,6 @@ function run()
 				if(STATE.watch[x].output_fd) fs.closeSync(STATE.watch[x].output_fd);
 
 				log(x+" is not running, restarting");
-				var opts = {};
 				if(CONFIG.watch[x].output) {
 					// redirect stdout/stderr into the file specified
 					// file will be opened in append mode
@@ -127,20 +117,32 @@ function run()
 					if(fd < 1) {
 						console.error("Error opening output file: " + CONFIG.watch[x].output);
 					} else {
-						opts.customFds = [-1, fd, fd];
 						STATE.watch[x].output_fd = fd;
 					}
 				}
-				var c = cproc.spawn(CONFIG.watch[x].cmd, [], opts);
+				var c = cproc.spawn(CONFIG.watch[x].cmd);
 				STATE.watch[x].pid = c.pid;
 				log("   pid: "+c.pid);
 
+				if(STATE.watch[x].output_fd) {
+					(function(fd){
+						var recv = function(data) {
+							// use sync for writes, as it can be dangerous to have multiple async
+							// writes in progress at the same time
+							var b = fs.writeSync(fd, data.toString('utf8'));
+						};
+						c.stdout.on('data', recv);
+						c.stderr.on('data', recv);
+					})(STATE.watch[x].output_fd);
+				}
+
 				if(CONFIG.watch[x].notify) {
 					new mailer.Mail({
-						to:      CONFIG.email,
-						from:    CONFIG.email,
-						subject: 'Custodian | Process Restarted',
-						body:    "Hostname: "+HOSTNAME+"\n\nProcess restarted: "+x+" (pid:"+c.pid+")\n"
+						to:       CONFIG.email,
+						from:     CONFIG.email,
+						subject:  'Custodian | Process Restarted',
+						body:     "Hostname: "+HOSTNAME+"\n\nProcess restarted: "+x+" (pid:"+c.pid+")\n",
+						callback: function(err, data){}
 					});
 				}
 			});
@@ -157,7 +159,7 @@ function run()
 	function run_job(x) {
 		var state = STATE.schedule[x],
 				cfg   = CONFIG.schedule[x];
-		if(state.running) return console.log("... "+x+" is still running, skipping");
+		if(state.running) return log("... "+x+" is still running, skipping");
 
 		var cmd = cfg.cmd;
 		if(cfg.args) cfg.args.forEach(function(it){
@@ -178,10 +180,11 @@ function run()
 			STATE.schedule[x].running = false;
 			if(err) {
 				new mailer.Mail({
-					to:      CONFIG.admin_email,
-					from:    CONFIG.admin_email,
-					subject: 'Custodian | Command Error',
-					body:    "Command returned an error.\n\nError: "+err+"\n\nHostname: "+HOSTNAME+"\nCommand: "+CONFIG.schedule[x].cmd+"\n\n"+sys.inspect(arguments)
+					to:       CONFIG.admin_email,
+					from:     CONFIG.admin_email,
+					subject:  'Custodian | Command Error',
+					body:     "Command returned an error.\n\nError: "+err+"\n\nHostname: "+HOSTNAME+"\nCommand: "+CONFIG.schedule[x].cmd+"\n\n"+util.inspect(arguments),
+					callback: function(err, data){}
 				});
 				console.log(x+": Gadzooks! Error!");
 				console.dir(arguments);
@@ -189,10 +192,11 @@ function run()
 				log(x+": finished");
 				if(stderr) {
 					new mailer.Mail({
-						to:      CONFIG.admin_email,
-						from:    CONFIG.admin_email,
-						subject: 'BSM | Command Error',
-						body:    "Command returned some output on stderr.\n\nHostname: "+HOSTNAME+"\nCommand: "+CONFIG.schedule[x].cmd+"\n\n"+stderr
+						to:       CONFIG.admin_email,
+						from:     CONFIG.admin_email,
+						subject:  'BSM | Command Error',
+						body:     "Command returned some output on stderr.\n\nHostname: "+HOSTNAME+"\nCommand: "+CONFIG.schedule[x].cmd+"\n\n"+stderr,
+						callback: function(err, data){}
 					});
 				}
 			}
