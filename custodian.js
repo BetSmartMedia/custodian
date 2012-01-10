@@ -120,7 +120,11 @@ function run()
 						STATE.watch[x].output_fd = fd;
 					}
 				}
-				var c = cproc.spawn(CONFIG.watch[x].cmd);
+				if (Array.isArray(CONFIG.watch[x].cmd)) {
+					var c = cproc.spawn(CONFIG.watch[x].cmd[0], CONFIG.watch[x].cmd.slice(1));
+				} else {
+					var c = cproc.spawn(CONFIG.watch[x].cmd);
+				}
 				STATE.watch[x].pid = c.pid;
 				log("   pid: "+c.pid);
 
