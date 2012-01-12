@@ -25,7 +25,7 @@ var mailer     = require("node-mailer");
 var daemon     = require("daemon");
 var dateFormat = require("dateformat");
 
-var VERSION = '1.2.1';
+var VERSION = '1.2.2';
 var HOSTNAME = require('os').hostname();
 
 /**
