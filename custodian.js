@@ -105,30 +105,40 @@ function run()
 
 		for(var x in STATE.watch) (function(x){
 			chkpid(STATE.watch[x].pid, function(is_running){
+				var state = STATE.watch[x],
+				    cfg   = CONFIG.watch[x];
+
 				if(is_running) return;
 
-				if(STATE.watch[x].output_fd) fs.closeSync(STATE.watch[x].output_fd);
+				if(state.output_fd) fs.closeSync(state.output_fd);
 
 				log(x+" is not running, restarting");
-				if(CONFIG.watch[x].output) {
+				if(cfg.output) {
 					// redirect stdout/stderr into the file specified
 					// file will be opened in append mode
-					var fd = fs.openSync(CONFIG.watch[x].output, 'a', 0644);
+					var fd = fs.openSync(cfg.output, 'a', 0644);
 					if(fd < 1) {
-						console.error("Error opening output file: " + CONFIG.watch[x].output);
+						console.error("Error opening output file: " + cfg.output);
 					} else {
-						STATE.watch[x].output_fd = fd;
+						state.output_fd = fd;
 					}
 				}
-				if (Array.isArray(CONFIG.watch[x].cmd)) {
-					var c = cproc.spawn(CONFIG.watch[x].cmd[0], CONFIG.watch[x].cmd.slice(1));
-				} else {
-					var c = cproc.spawn(CONFIG.watch[x].cmd);
+
+				var args = [];
+				var cmd  = cfg.cmd;
+				var opts = {};
+				if(Array.isArray(cfg.cmd)) {
+					cmd  = cfg.cmd[0];
+					args = cfg.cmd.slice(1);
 				}
-				STATE.watch[x].pid = c.pid;
+				if(cfg.cwd) {
+					opts.cwd = cfg.cwd;
+				}
+				var c = cproc.spawn(cmd, args, opts);
+				state.pid = c.pid;
 				log("   pid: "+c.pid);
 
-				if(STATE.watch[x].output_fd) {
+				if(state.output_fd) {
 					(function(fd){
 						var recv = function(data) {
 							// use sync for writes, as it can be dangerous to have multiple async
@@ -137,10 +147,10 @@ function run()
 						};
 						c.stdout.on('data', recv);
 						c.stderr.on('data', recv);
-					})(STATE.watch[x].output_fd);
+					})(state.output_fd);
 				}
 
-				if(CONFIG.watch[x].notify) {
+				if(cfg.notify) {
 					new mailer.Mail({
 						to:       CONFIG.email,
 						from:     CONFIG.email,
@@ -172,22 +182,24 @@ function run()
 				default:         console.log("Unrecognized dyn arg: "+it);
 			}
 		});
-		STATE.schedule[x].running = true;
-		STATE.schedule[x].last_run = new Date();
+		state.running = true;
+		state.last_run = new Date();
 
 		log("exec " + x + ": " + cmd);
 		var opts = {
-			env:       { env: {IN_JANITOR: 1}},
-			maxBuffer: 10*1024*1024 // 10MB
+			env:       { env: {IN_CUSTODIAN: 1}},
+			maxBuffer: 10*1024*1024, // 10MB
+			cwd:       cfg.cwd || null
 		};
+
 		cproc.exec(cmd, opts, function(err, stdout, stderr){
-			STATE.schedule[x].running = false;
+			state.running = false;
 			if(err) {
 				new mailer.Mail({
-					to:       CONFIG.admin_email,
-					from:     CONFIG.admin_email,
+					to:       CONFIG.email,
+					from:     CONFIG.email,
 					subject:  'Custodian | Command Error',
-					body:     "Command returned an error.\n\nError: "+err+"\n\nHostname: "+HOSTNAME+"\nCommand: "+CONFIG.schedule[x].cmd+"\n\n"+util.inspect(arguments),
+					body:     "Command returned an error.\n\nError: "+err+"\n\nHostname: "+HOSTNAME+"\nCommand: "+cfg.cmd+"\n\n"+util.inspect(arguments),
 					callback: function(err, data){}
 				});
 				console.log(x+": Gadzooks! Error!");
@@ -196,10 +208,10 @@ function run()
 				log(x+": finished");
 				if(stderr) {
 					new mailer.Mail({
-						to:       CONFIG.admin_email,
-						from:     CONFIG.admin_email,
-						subject:  'BSM | Command Error',
-						body:     "Command returned some output on stderr.\n\nHostname: "+HOSTNAME+"\nCommand: "+CONFIG.schedule[x].cmd+"\n\n"+stderr,
+						to:       CONFIG.email,
+						from:     CONFIG.email,
+						subject:  'Custodian | Command Error',
+						body:     "Command returned some output on stderr.\n\nHostname: "+HOSTNAME+"\nCommand: "+cfg.cmd+"\n\n"+stderr,
 						callback: function(err, data){}
 					});
 				}

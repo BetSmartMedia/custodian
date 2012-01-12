@@ -12,6 +12,10 @@
 	},
 
 	"watch": {
-		"watch1": {"cmd":"test/job1.sh", "notify":false, "output":"watch1.log"}
+		"watch1": {
+			"cmd":    "test/job1.sh",
+			"notify": false,
+			"output": "watch1.log"
+		}
 	}
 }
