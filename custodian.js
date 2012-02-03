@@ -25,8 +25,12 @@ var mailer     = require("node-mailer");
 var daemon     = require("daemon");
 var dateFormat = require("dateformat");
 
-var VERSION = '1.2.2';
+var VERSION  = '1.2.3';
 var HOSTNAME = require('os').hostname();
+var CFG_FILE = null;
+
+var CONFIG = {};
+var STATE  = {schedule:{}, watch:{}};
 
 /**
  * Read and parse config
@@ -35,13 +39,9 @@ if(process.argv.length < 3) {
 	console.error("Usage: node custodian.js <config_file>");
 	process.exit(1);
 }
-try {
-	var c = fs.readFileSync(process.argv[2], "utf8");
-	var CONFIG = JSON.parse(c);
-} catch(e) {
-	console.error("Error reading config:", e.message);
-	process.exit(1);
-}
+
+CFG_FILE = process.argv[2];
+load_config();
 
 /**
  * Run as a daemon or as a regular process
@@ -74,15 +74,65 @@ if(CONFIG.daemon) {
 	run();
 }
 
+// catch SIGHUP and reload config
+process.on('SIGHUP', function() {
+	console.log("Caught SIGHUP - reloading configuration");
+	load_config();
+	init_state();
+});
+
+
+/**
+ * Load configuration
+ */
+function load_config()
+{
+	try {
+		var c = fs.readFileSync(CFG_FILE, "utf8");
+		CONFIG = JSON.parse(c);
+	} catch(e) {
+		console.error("Error reading config:", e.message);
+		process.exit(1);
+	}
+}
+
+/**
+ * Initialize (or re-initialize) state
+ */
+function init_state()
+{
+	clone = function(o) {
+		var c = {};
+		for(var x in o) c[x] = o[x];
+		return c;
+	}
+
+	reload = function(key, init) {
+		var remove = {};
+		for(var x in STATE[key]) remove[x] = true;
+		for(var x in CONFIG[key]) {
+			delete remove[x];
+			if(STATE[key][x] == undefined) {
+				STATE[key][x] = clone(init);
+			}
+		}
+		for(var x in remove) delete STATE[key][x];
+	}
+
+	reload('schedule', {running: false, last_run: new Date("1980/01/01 00:00:00")});
+	reload('watch',    {pid: 0, last_restart: 0});
+}
+
 /**
  * Main mojo
  */
 function run()
 {
 	// init state
-	STATE = {schedule:{}, watch:{}};
-	for(var x in CONFIG.schedule) STATE.schedule[x] = {running: false, last_run: new Date("1980/01/01 00:00:00")};
-	for(var x in CONFIG.watch)    STATE.watch[x]    = {pid: 0, last_restart: 0};
+	init_state();
+	//STATE = {schedule:{}, watch:{}};
+	//for(var x in CONFIG.schedule) STATE.schedule[x] = {running: false, last_run: new Date("1980/01/01 00:00:00")};
+	//for(var x in CONFIG.watch)    STATE.watch[x]    = {pid: 0, last_restart: 0};
 
 	function log(str) {
 		var now = dateFormat(new Date, "yyyy-mm-dd HH:MM:ss");
@@ -107,6 +157,10 @@ function run()
 			chkpid(STATE.watch[x].pid, function(is_running){
 				var state = STATE.watch[x],
 				    cfg   = CONFIG.watch[x];
+
+				// if the config entry no longer exists, then it was probably removed
+				// and we were SIGHUP'ed.
+				if(cfg == undefined) return;
 
 				if(is_running) return;
 

@@ -13,7 +13,7 @@
 
 	"watch": {
 		"watch1": {
-			"cmd":    "test/job1.sh",
+			"cmd":    "test/watch1.sh",
 			"notify": false,
 			"output": "watch1.log"
 		}
