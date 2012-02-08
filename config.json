@@ -1,5 +1,6 @@
 {
-	"email": "admin@example.com",
+	"notify_email": "admin@example.com",
+	"from_email":   "custodian@example.com",
 
 	"daemon": false,
 	"log": "custodian.log",

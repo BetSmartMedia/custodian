@@ -2,11 +2,11 @@
   "author": "Judd Vinet <judd@betsmartmedia.com>",
   "name": "custodian",
   "description": "A different sort of cron",
-  "version": "1.2.3",
+  "version": "1.2.4",
   "main": "custodian.js",
 	"bin": "custodian.js",
   "engines": {
-    "node": "~0.6.7"
+    "node": "~0.6.10"
   },
   "repository": {
     "type": "git",

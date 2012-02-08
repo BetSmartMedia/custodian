@@ -13,7 +13,7 @@
  * Custodian also provides basic watchdog functionality. If a process is not
  * running, it will be restarted.
  *
- * This code works on NodeJS 0.6.7.
+ * This code works on NodeJS 0.6.10.
  *
  * TODO: use nodules for hot-loading config?
  */
@@ -25,7 +25,7 @@ var mailer     = require("node-mailer");
 var daemon     = require("daemon");
 var dateFormat = require("dateformat");
 
-var VERSION  = '1.2.3';
+var VERSION  = '1.2.4';
 var HOSTNAME = require('os').hostname();
 var CFG_FILE = null;
 
@@ -206,8 +206,8 @@ function run()
 
 				if(cfg.notify) {
 					new mailer.Mail({
-						to:       CONFIG.email,
-						from:     CONFIG.email,
+						to:       CONFIG.notify_email || CONFIG.email,
+						from:     CONFIG.from_email || CONFIG.email,
 						subject:  'Custodian | Process Restarted',
 						body:     "Hostname: "+HOSTNAME+"\n\nProcess restarted: "+x+" (pid:"+c.pid+")\n",
 						callback: function(err, data){}
@@ -250,8 +250,8 @@ function run()
 			state.running = false;
 			if(err) {
 				new mailer.Mail({
-					to:       CONFIG.email,
-					from:     CONFIG.email,
+					to:       CONFIG.notify_email || CONFIG.email,
+					from:     CONFIG.from_email || CONFIG.email,
 					subject:  'Custodian | Command Error',
 					body:     "Command returned an error.\n\nError: "+err+"\n\nHostname: "+HOSTNAME+"\nCommand: "+cfg.cmd+"\n\n"+util.inspect(arguments),
 					callback: function(err, data){}
@@ -262,8 +262,8 @@ function run()
 				log(x+": finished");
 				if(stderr) {
 					new mailer.Mail({
-						to:       CONFIG.email,
-						from:     CONFIG.email,
+						to:       CONFIG.notify_email || CONFIG.email,
+						from:     CONFIG.from_email || CONFIG.email,
 						subject:  'Custodian | Command Error',
 						body:     "Command returned some output on stderr.\n\nHostname: "+HOSTNAME+"\nCommand: "+cfg.cmd+"\n\n"+stderr,
 						callback: function(err, data){}
