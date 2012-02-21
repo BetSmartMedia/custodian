@@ -21,11 +21,11 @@
 var util       = require("util");
 var cproc      = require("child_process");
 var fs         = require("fs");
-var mailer     = require("node-mailer");
+var mailer     = require("./lib/node-mailer");
 var daemon     = require("daemon");
 var dateFormat = require("dateformat");
 
-var VERSION  = '1.2.4';
+var VERSION  = '1.2.5';
 var HOSTNAME = require('os').hostname();
 var CFG_FILE = null;
 
