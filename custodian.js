@@ -14,8 +14,6 @@
  * running, it will be restarted.
  *
  * This code works on NodeJS 0.6.10.
- *
- * TODO: use nodules for hot-loading config?
  */
 
 var util       = require("util");
@@ -130,9 +128,6 @@ function run()
 {
 	// init state
 	init_state();
-	//STATE = {schedule:{}, watch:{}};
-	//for(var x in CONFIG.schedule) STATE.schedule[x] = {running: false, last_run: new Date("1980/01/01 00:00:00")};
-	//for(var x in CONFIG.watch)    STATE.watch[x]    = {pid: 0, last_restart: 0};
 
 	function log(str) {
 		var now = dateFormat(new Date, "yyyy-mm-dd HH:MM:ss");
@@ -164,7 +159,20 @@ function run()
 
 				if(is_running) return;
 
-				if(state.output_fd) fs.closeSync(state.output_fd);
+				if(state.output_fd) {
+					fs.closeSync(state.output_fd);
+					state.output_fd = 0;
+				}
+
+				// if `rate_limit` is set, don't restart the job more than once
+				// every X seconds
+				if(CONFIG.rate_limit) {
+					var now = (new Date).getTime();
+					if(now - state.last_restart < (CONFIG.rate_limit * 1000)) {
+						log(x+" was started less than "+CONFIG.rate_limit+" seconds ago, deferring");
+						return;
+					}
+				}
 
 				log(x+" is not running, restarting");
 				if(cfg.output) {
@@ -190,6 +198,7 @@ function run()
 				}
 				var c = cproc.spawn(cmd, args, opts);
 				state.pid = c.pid;
+				state.last_restart = (new Date()).getTime();
 				log("   pid: "+c.pid);
 
 				if(state.output_fd) {

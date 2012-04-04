@@ -6,6 +6,8 @@
 	"log": "custodian.log",
 	"pid": "custodian.pid",
 
+	"rate_limit": "60",
+
 	"schedule": {
 		"job1": {"cmd":"test/job1.sh", "args":["last_run"], "when":"every 2s"},
 		"job2": {"cmd":"test/job2.sh", "args":["last_run"], "when":"after job1"},
@@ -17,6 +19,10 @@
 			"cmd":    "test/watch1.sh",
 			"notify": false,
 			"output": "watch1.log"
+		},
+		"watch2": {
+			"cmd":    "test/watch2.sh",
+			"notify": false
 		}
 	}
 }
