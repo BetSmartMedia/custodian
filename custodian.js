@@ -143,8 +143,7 @@ function run()
 			if(p < 1) return cb(false);
 
 			cproc.exec('ps -p '+p, function(err, stdout, stderr){
-				if(err) return cb(false);
-				cb(true);
+				cb(err ? false : true);
 			});
 		};
 
@@ -161,7 +160,7 @@ function run()
 
 				if(state.output_fd) {
 					fs.closeSync(state.output_fd);
-					state.output_fd = 0;
+					delete state.output_fd;
 				}
 
 				// if `rate_limit` is set, don't restart the job more than once
@@ -202,15 +201,21 @@ function run()
 				log("   pid: "+c.pid);
 
 				if(state.output_fd) {
-					(function(fd){
+					(function(cfg, state){
 						var recv = function(data) {
 							// use sync for writes, as it can be dangerous to have multiple async
 							// writes in progress at the same time
-							var b = fs.writeSync(fd, data.toString('utf8'));
+							try {
+								var b = fs.writeSync(state.output_fd, data.toString('utf8'));
+							} catch(e) {
+								console.error("Error writing to output file:", cfg.output);
+								console.error("  FD:", state.output_fd);
+								console.error("  Error:", e.message);
+							}
 						};
 						c.stdout.on('data', recv);
 						c.stderr.on('data', recv);
-					})(state.output_fd);
+					})(cfg, state);
 				}
 
 				if(cfg.notify) {

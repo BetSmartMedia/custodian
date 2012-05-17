@@ -6,7 +6,7 @@
 	"log": "custodian.log",
 	"pid": "custodian.pid",
 
-	"rate_limit": "60",
+	"rate_limit": "5",
 
 	"schedule": {
 		"job1": {"cmd":"test/job1.sh", "args":["last_run"], "when":"every 2s"},
