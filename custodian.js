@@ -30,6 +30,8 @@ var CFG_FILE = null;
 var CONFIG = {};
 var STATE  = {schedule:{}, watch:{}};
 
+process.env.IN_CUSTODIAN = 1
+
 /**
  * Read and parse config
  */
@@ -255,7 +257,6 @@ function run()
 
 		log("exec " + x + ": " + cmd);
 		var opts = {
-			env:       { env: {IN_CUSTODIAN: 1}},
 			maxBuffer: 10*1024*1024, // 10MB
 			cwd:       cfg.cwd || null
 		};
