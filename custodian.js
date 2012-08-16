@@ -99,13 +99,13 @@ function load_config() {
  * Initialize (or re-initialize) state
  */
 function init_state() {
-	clone = function(o) {
+	function clone (o) {
 		var c = {};
 		for(var x in o) c[x] = o[x];
 		return c;
 	}
 
-	reload = function(key, init) {
+	function reload (key, init) {
 		var remove = {};
 		for(var x in STATE[key]) remove[x] = true;
 		for(var x in CONFIG[key]) {
@@ -138,7 +138,7 @@ function run() {
 	 * Watch any active jobs in STATE.watch.
 	 */
 	function watch_jobs() {
-		var chkpid = function(p, cb) {
+		function chkpid (p, cb) {
 			if(p < 1) return cb(false);
 
 			cproc.exec('ps -p '+p, function(err, stdout, stderr){
