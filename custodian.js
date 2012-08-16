@@ -121,18 +121,18 @@ function init_state() {
 	reload('watch',    {pid: 0, last_restart: 0});
 }
 
+function log(str) {
+	var now = dateFormat(new Date, "yyyy-mm-dd HH:MM:ss");
+	var msg = "[" + now + "] " + str;
+	console.log(msg);
+}
+
 /**
  * Main mojo
  */
 function run() {
 	// init state
 	init_state();
-
-	function log(str) {
-		var now = dateFormat(new Date, "yyyy-mm-dd HH:MM:ss");
-		var msg = "[" + now + "] " + str;
-		console.log(msg);
-	}
 
 	/**
 	 * Watch any active jobs in STATE.watch.
