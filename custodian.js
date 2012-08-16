@@ -46,7 +46,7 @@ load_config();
 /**
  * Run as a daemon or as a regular process
  */
-if(CONFIG.daemon) {
+if (CONFIG.daemon) {
 	// become a daemon
 	['log','pid'].map(function(d) {
 		if(!CONFIG[d]) {
@@ -85,8 +85,7 @@ process.on('SIGHUP', function() {
 /**
  * Load configuration
  */
-function load_config()
-{
+function load_config() {
 	try {
 		var c = fs.readFileSync(CFG_FILE, "utf8");
 		CONFIG = JSON.parse(c);
@@ -99,8 +98,7 @@ function load_config()
 /**
  * Initialize (or re-initialize) state
  */
-function init_state()
-{
+function init_state() {
 	clone = function(o) {
 		var c = {};
 		for(var x in o) c[x] = o[x];
@@ -126,8 +124,7 @@ function init_state()
 /**
  * Main mojo
  */
-function run()
-{
+function run() {
 	// init state
 	init_state();
 
