@@ -111,9 +111,14 @@ function init_state() {
 		for(var x in STATE[key]) remove[x] = true;
 		for(var x in CONFIG[key]) {
 			delete remove[x];
-			if(STATE[key][x] == undefined) {
-				STATE[key][x] = clone(init);
+			var state = STATE[key][x] || clone(init)
+			if (var cfg_env = CONFIG[key][x].env) {
+				cfg_env.__proto__ = process.env;
+			} else {
+				cfg_env = process.env;
 			}
+			state.env = state.env || {};
+			state.env.__proto__ = cfg_env;
 		}
 		for(var x in remove) delete STATE[key][x];
 	}
@@ -296,6 +301,11 @@ function spawn(name, cfg, state) {
 	cmd = args.shift();
 	var cwd = cfg.cwd;
 
+	args.map(function (it) {
+		if (it[0] !== '$') return it
+		return state.env[it.substring(1)] || ''
+	});
+
 	if((var output_file = cfg.output) && output_file !== state.output_file) {
 		// redirect stdout/stderr into the file specified
 		// file will be opened in append mode
@@ -309,7 +319,7 @@ function spawn(name, cfg, state) {
 		c.stderr.pipe(state.output)
 	}
 
-	var c = cproc.spawn(cmd, args, {env: process.env, cwd: cwd})
+	var c = cproc.spawn(cmd, args, {env: state.env, cwd: cwd})
 	state.pid = c.pid;
 	state.last_run = (new Date()).getTime();
 	log("Started " + name + "\n    pid: "+c.pid);
