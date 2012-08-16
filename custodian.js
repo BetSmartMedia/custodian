@@ -23,7 +23,7 @@ var mailer     = require("./lib/node-mailer");
 var daemon     = require("daemon");
 var dateFormat = require("dateformat");
 
-var VERSION  = '1.2.5';
+var VERSION  = require('./package.json').version;
 var HOSTNAME = require('os').hostname();
 var CFG_FILE = null;
 
