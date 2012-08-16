@@ -22,6 +22,7 @@ var fs         = require("fs");
 var mailer     = require("./lib/node-mailer");
 var daemon     = require("daemon");
 var dateFormat = require("dateformat");
+var shellParse = require("shell-quote").parse;
 
 var VERSION  = require('./package.json').version;
 var HOSTNAME = require('os').hostname();
@@ -157,11 +158,6 @@ function run() {
 
 				if(is_running) return;
 
-				if(state.output_fd) {
-					fs.closeSync(state.output_fd);
-					delete state.output_fd;
-				}
-
 				// if `rate_limit` is set, don't restart the job more than once
 				// every X seconds
 				if(CONFIG.rate_limit) {
@@ -173,59 +169,10 @@ function run() {
 				}
 
 				log(x+" is not running, restarting");
-				if(cfg.output) {
-					// redirect stdout/stderr into the file specified
-					// file will be opened in append mode
-					var fd = fs.openSync(cfg.output, 'a', 0644);
-					if(fd < 1) {
-						console.error("Error opening output file: " + cfg.output);
-					} else {
-						state.output_fd = fd;
-					}
-				}
 
-				var args = [];
-				var cmd  = cfg.cmd;
-				var opts = {};
-				if(Array.isArray(cfg.cmd)) {
-					cmd  = cfg.cmd[0];
-					args = cfg.cmd.slice(1);
-				}
-				if(cfg.cwd) {
-					opts.cwd = cfg.cwd;
-				}
-				var c = cproc.spawn(cmd, args, opts);
-				state.pid = c.pid;
-				state.last_restart = (new Date()).getTime();
-				log("   pid: "+c.pid);
-
-				if(state.output_fd) {
-					(function(cfg, state){
-						var recv = function(data) {
-							// use sync for writes, as it can be dangerous to have multiple async
-							// writes in progress at the same time
-							try {
-								var b = fs.writeSync(state.output_fd, data.toString('utf8'));
-							} catch(e) {
-								console.error("Error writing to output file:", cfg.output);
-								console.error("  FD:", state.output_fd);
-								console.error("  Error:", e.message);
-							}
-						};
-						c.stdout.on('data', recv);
-						c.stderr.on('data', recv);
-					})(cfg, state);
-				}
-
-				if(cfg.notify) {
-					new mailer.Mail({
-						to:       CONFIG.notify_email || CONFIG.email,
-						from:     CONFIG.from_email || CONFIG.email,
-						subject:  'Custodian | Process Restarted',
-						body:     "Hostname: "+HOSTNAME+"\n\nProcess restarted: "+x+" (pid:"+c.pid+")\n",
-						callback: function(err, data){}
-					});
-				}
+				var c = spawn(x, cfg, state);
+				if(cfg.notify) sendNotification("restarted", x, c.pid)
+				state.last_restart = (new Date).getTime();
 			});
 		})(x);
 	}
@@ -250,7 +197,6 @@ function run() {
 			}
 		});
 		state.running = true;
-		state.last_run = new Date();
 
 		log("exec " + x + ": " + cmd);
 		var opts = {
@@ -322,4 +268,56 @@ function run() {
 	log("Custodian v"+VERSION+" starting...");
 	dispatch();
 	setInterval(dispatch, 5000);  // every 5 seconds
+}
+
+function sendNotification(kind, name, pid, body) {
+	body || (body = "")
+	new mailer.Mail({
+		to:       CONFIG.notify_email || CONFIG.email,
+		from:     CONFIG.from_email || CONFIG.email,
+		subject:  'Custodian | Process ' + kind + '(' + name + ')',
+		body:     "Hostname: " + HOSTNAME +
+							"\nProcess: " + name +
+							"\nPID: "+ pid +
+							(body ? "\n\n" + body : ""),
+		callback: function(err, data){}
+	});
+}
+
+/**
+ * Spawn a new process using the settings in `cfg` and return it.
+ */
+function spawn(name, cfg, state) {
+	if (!(var cmd = cfg.cmd)) {
+		console.error('No "cmd" in ' + name + ' cfg: ' + util.format(cfg));
+		process.exit(2)
+	}
+	var args = shellParse(cmd);
+	cmd = args.shift();
+	var cwd = cfg.cwd;
+
+	if((var output_file = cfg.output) && output_file !== state.output_file) {
+		// redirect stdout/stderr into the file specified
+		// file will be opened in append mode
+		if (state.output) state.output.end()
+		state.output = fs.createWriteStream(output_file, {flags: 'a', mode: 0644})
+		state.output.on('error', function (err) {
+			console.error("Error writing output file: " + output_file, err)
+		}
+		state.output_file = output_file;
+		c.stdout.pipe(state.output)
+		c.stderr.pipe(state.output)
+	}
+
+	var c = cproc.spawn(cmd, args, {env: process.env, cwd: cwd})
+	state.pid = c.pid;
+	state.last_run = (new Date()).getTime();
+	log("Started " + name + "\n    pid: "+c.pid);
+	c.on('error', sendNotification.bind(null, "error", name, c.pid))
+	c.on('exit', function onExit (code) {
+		if (!code) return // A-ok!
+		sendNotification("error code " + code, name, c.pid)
+		console.error(name+": Gadzooks! Error!");
+	})
+	return c;
 }
