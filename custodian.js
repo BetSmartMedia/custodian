@@ -106,13 +106,13 @@ function init_state() {
 		return c;
 	}
 
-	function reload (key, init) {
+	function reload (type, init) {
 		var remove = {};
-		for(var x in STATE[key]) remove[x] = true;
-		for(var x in CONFIG[key]) {
-			delete remove[x];
-			var state = STATE[key][x] || clone(init)
-			if (var cfg_env = CONFIG[key][x].env) {
+		for(var name in STATE[type]) remove[name] = true;
+		for(var name in CONFIG[type]) {
+			delete remove[name];
+			var state = STATE[type][name] || clone(init)
+			if (var cfg_env = CONFIG[type][name].env) {
 				cfg_env.__proto__ = process.env;
 			} else {
 				cfg_env = process.env;
@@ -120,7 +120,7 @@ function init_state() {
 			state.env = state.env || {};
 			state.env.__proto__ = cfg_env;
 		}
-		for(var x in remove) delete STATE[key][x];
+		for(var name in remove) delete STATE[type][name];
 	}
 
 	reload('schedule', {running: false, last_run: new Date("1980/01/01 00:00:00")});
@@ -152,10 +152,10 @@ function run() {
 			});
 		};
 
-		for(var x in STATE.watch) (function(x){
-			chkpid(STATE.watch[x].pid, function(is_running){
-				var state = STATE.watch[x],
-				    cfg   = CONFIG.watch[x];
+		for(var name in STATE.watch) (function(name){
+			chkpid(STATE.watch[name].pid, function(is_running){
+				var state = STATE.watch[name],
+				    cfg   = CONFIG.watch[name];
 
 				// if the config entry no longer exists, then it was probably removed
 				// and we were SIGHUP'ed.
@@ -168,18 +168,18 @@ function run() {
 				if(CONFIG.rate_limit) {
 					var now = (new Date).getTime();
 					if(now - state.last_restart < (CONFIG.rate_limit * 1000)) {
-						log(x+" was started less than "+CONFIG.rate_limit+" seconds ago, deferring");
+						log(name+" was started less than "+CONFIG.rate_limit+" seconds ago, deferring");
 						return;
 					}
 				}
 
-				log(x+" is not running, restarting");
+				log(name+" is not running, restarting");
 
-				var c = spawn(x, cfg, state);
-				if(cfg.notify) sendNotification("restarted", x, c.pid)
+				var c = spawn(name, cfg, state)
+				if(cfg.notify) sendNotification("restarted", name, c.pid)
 				state.last_restart = (new Date).getTime();
 			});
-		})(x);
+		})(name);
 	}
 
 	/**
