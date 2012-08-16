@@ -189,10 +189,10 @@ function run() {
 	 * If a sub-job is already running, then it is completely bypassed for this
 	 * dispatch cycle.
 	 */
-	function run_job(x) {
-		var state = STATE.schedule[x],
-				cfg   = CONFIG.schedule[x];
-		if(state.running) return log("... "+x+" is still running, skipping");
+	function run_job(name) {
+		var state = STATE.schedule[name],
+				cfg   = CONFIG.schedule[name];
+		if(state.running) return log("... "+name+" is still running, skipping");
 
 		var cmd = cfg.cmd;
 		if(cfg.args) cfg.args.forEach(function(it){
@@ -203,44 +203,20 @@ function run() {
 		});
 		state.running = true;
 
-		log("exec " + x + ": " + cmd);
-		var opts = {
-			maxBuffer: 10*1024*1024, // 10MB
-			cwd:       cfg.cwd || null
-		};
-
-		cproc.exec(cmd, opts, function(err, stdout, stderr){
-			state.running = false;
-			if(err) {
-				new mailer.Mail({
-					to:       CONFIG.notify_email || CONFIG.email,
-					from:     CONFIG.from_email || CONFIG.email,
-					subject:  'Custodian | Command Error',
-					body:     "Command returned an error.\n\nError: "+err+"\n\nHostname: "+HOSTNAME+"\nCommand: "+cfg.cmd+"\n\n"+util.inspect(arguments),
-					callback: function(err, data){}
-				});
-				console.log(x+": Gadzooks! Error!");
-				console.dir(arguments);
-			} else {
-				log(x+": finished");
-				if(stderr) {
-					new mailer.Mail({
-						to:       CONFIG.notify_email || CONFIG.email,
-						from:     CONFIG.from_email || CONFIG.email,
-						subject:  'Custodian | Command Error',
-						body:     "Command returned some output on stderr.\n\nHostname: "+HOSTNAME+"\nCommand: "+cfg.cmd+"\n\n"+stderr,
-						callback: function(err, data){}
-					});
-				}
-			}
+		var c = spawn(name, cfg, state);
+		buffer_stderr(c);
+		c.on('exit', function(code) {
+			// TODO - should sub-jobs run after failure?
+			// if (code) return
 
 			// find jobs that want to be run after this job, and execute them
-			for(var y in CONFIG.schedule) (function(y){
-				var m = /^after (.*)$/.exec(CONFIG.schedule[y].when);
-				if(!m || m[1] != x) return;
-				run_job(y);
-			})(y);
-		});
+			Object.keys(CONFIG.schedule).forEach(function (next_job_name) {
+				var next_job = CONFIG.schedule[next_job_name];
+				var m = /^after (.*)$/.exec(next_job.when);
+				if (!m || m[1] != name) return;
+				run_job(next_job_name);
+			})
+		})
 	}
 
 	/**
@@ -297,8 +273,10 @@ function spawn(name, cfg, state) {
 		console.error('No "cmd" in ' + name + ' cfg: ' + util.format(cfg));
 		process.exit(2)
 	}
-	var args = shellParse(cmd);
-	cmd = args.shift();
+	if (!(var args = cfg.args)) {
+		args = shellParse(cmd);
+		cmd = args.shift();
+	}
 	var cwd = cfg.cwd;
 
 	args.map(function (it) {
@@ -330,4 +308,26 @@ function spawn(name, cfg, state) {
 		console.error(name+": Gadzooks! Error!");
 	})
 	return c;
+}
+
+function buffer_stderr(name, c, maxSize) {
+	maxSize = maxSize || 10 * 1024 * 1024;  // 10MB
+	var buffer = new Buffer(maxSize);
+		, position = 0;
+	c.stderr.on('data', function write (data) {
+		if (data.length + position < buffer.length) {
+			data.copy(buffer, position)
+			position += data.length
+			return
+		} 
+		var msg = "STDERR > 10MB:\n... " + buffer.slice(position - 1024, position) + data;
+		c.emit('error', msg);
+		buffer = new Buffer(maxSize);
+		position = 0;
+	})
+	c.on('exit', function(code) {
+		if (position > 0) {
+			sendNotification('returned output on stderr', name, c.pid, buffer.slice(0, position))
+		}
+	})
 }
