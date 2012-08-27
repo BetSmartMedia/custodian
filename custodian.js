@@ -42,7 +42,7 @@ if(process.argv.length < 3) {
 }
 
 CFG_FILE = process.argv[2];
-load_config();
+load_config(true);
 
 /**
  * Run as a daemon or as a regular process
@@ -86,13 +86,13 @@ process.on('SIGHUP', function() {
 /**
  * Load configuration
  */
-function load_config() {
+function load_config(exitOnFailure) {
 	try {
 		var c = fs.readFileSync(CFG_FILE, "utf8");
 		CONFIG = JSON.parse(c);
 	} catch(e) {
 		console.error("Error reading config:", e.message);
-		process.exit(1);
+		if (exitOnFailure) process.exit(1);
 	}
 }
 
