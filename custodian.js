@@ -19,12 +19,14 @@
 var util       = require("util");
 var cproc      = require("child_process");
 var fs         = require("fs");
-var mailer     = require("./lib/node-mailer");
 var daemon     = require("daemon");
 var dateFormat = require("dateformat");
+
 var shellParse = require("shell-quote").parse;
+var temp       = require("temp");
 
 var VERSION  = require('./package.json').version;
+var mailer     = require("./lib/node-mailer");
 var HOSTNAME = require('os').hostname();
 var CFG_FILE = null;
 
@@ -49,7 +51,7 @@ load_config(true);
  */
 if (CONFIG.daemon) {
 	// become a daemon
-	['log','pid'].map(function(d) {
+	['log','pid'].forEach(function(d) {
 		if(!CONFIG[d]) {
 			console.error("Error: '"+d+"' directive must be specified when run as a daemon.");
 			process.exit(1);
@@ -111,8 +113,9 @@ function init_state() {
 		for(var name in STATE[type]) remove[name] = true;
 		for(var name in CONFIG[type]) {
 			delete remove[name];
-			var state = STATE[type][name] || clone(init)
-			if (var cfg_env = CONFIG[type][name].env) {
+			var state = STATE[type][name] = STATE[type][name] || clone(init);
+			var cfg_env;
+			if (cfg_env = CONFIG[type][name].env) {
 				cfg_env.__proto__ = process.env;
 			} else {
 				cfg_env = process.env;
@@ -141,93 +144,14 @@ function run() {
 	init_state();
 
 	/**
-	 * Watch any active jobs in STATE.watch.
-	 */
-	function watch_jobs() {
-		function chkpid (p, cb) {
-			if(p < 1) return cb(false);
-
-			cproc.exec('ps -p '+p, function(err, stdout, stderr){
-				cb(err ? false : true);
-			});
-		};
-
-		for(var name in STATE.watch) (function(name){
-			chkpid(STATE.watch[name].pid, function(is_running){
-				var state = STATE.watch[name],
-				    cfg   = CONFIG.watch[name];
-
-				// if the config entry no longer exists, then it was probably removed
-				// and we were SIGHUP'ed.
-				if(cfg == undefined) return;
-
-				if(is_running) return;
-
-				// if `rate_limit` is set, don't restart the job more than once
-				// every X seconds
-				if(CONFIG.rate_limit) {
-					var now = (new Date).getTime();
-					if(now - state.last_restart < (CONFIG.rate_limit * 1000)) {
-						log(name+" was started less than "+CONFIG.rate_limit+" seconds ago, deferring");
-						return;
-					}
-				}
-
-				log(name+" is not running, restarting");
-
-				var c = spawn(name, cfg, state)
-				if(cfg.notify) sendNotification("restarted", name, c.pid)
-				state.last_restart = (new Date).getTime();
-			});
-		})(name);
-	}
-
-	/**
-	 * Run a scheduled job.  When the job completes, look for other jobs ("sub-jobs")
-	 * that should run after this one, and execute them.
-	 *
-	 * If a sub-job is already running, then it is completely bypassed for this
-	 * dispatch cycle.
-	 */
-	function run_job(name) {
-		var state = STATE.schedule[name],
-				cfg   = CONFIG.schedule[name];
-		if(state.running) return log("... "+name+" is still running, skipping");
-
-		var cmd = cfg.cmd;
-		if(cfg.args) cfg.args.forEach(function(it){
-			switch(it) {
-				case 'last_run': cmd += ' "' + dateFormat(state.last_run, "yyyy-mm-dd HH:MM:ss") + '"'; break;
-				default:         console.log("Unrecognized dyn arg: "+it);
-			}
-		});
-		state.running = true;
-
-		var c = spawn(name, cfg, state);
-		buffer_stderr(c);
-		c.on('exit', function(code) {
-			// TODO - should sub-jobs run after failure?
-			// if (code) return
-
-			// find jobs that want to be run after this job, and execute them
-			Object.keys(CONFIG.schedule).forEach(function (next_job_name) {
-				var next_job = CONFIG.schedule[next_job_name];
-				var m = /^after (.*)$/.exec(next_job.when);
-				if (!m || m[1] != name) return;
-				run_job(next_job_name);
-			})
-		})
-	}
-
-	/**
 	 * Run jobs that should execute every X seconds
 	 */
-	function dispatch() {
+	function dispatch () {
 		var now = new Date();
 
 		// wrapping the guts of the loop in a function forces earlier
 		// scope binding, which fixes the closures-in-loops gotcha.
-		for(var x in CONFIG.schedule) (function(x){
+		Object.keys(CONFIG.schedule).forEach(function (x) {
 			var m = /^every (.*)([smhd])$/.exec(CONFIG.schedule[x].when);
 			if(!m) return;
 
@@ -241,18 +165,95 @@ function run() {
 			if(STATE.schedule[x].last_run <= new Date(now - (m[1] * mult * 1000))) {
 				run_job(x);
 			}
-		})(x);
-
-		watch_jobs();
+		})
+		check_watched_jobs();
 	}
 
 	log("Custodian v"+VERSION+" starting...");
 	dispatch();
 	setInterval(dispatch, 5000);  // every 5 seconds
+
+	/**
+	 * Check on the jobs in CONFIG.watch, restarting those that aren't running, and
+	 * killing those that are no longer in the config.
+	 */
+	function check_watched_jobs () {
+
+		var config_jobs = Object.keys(CONFIG.watch)
+			, is_stale = function (name) { return config_jobs.indexOf(name) === -1 }
+			, removed_jobs  = Object.keys(STATE.watch).filter(is_stale)
+
+		config_jobs.forEach(function (name) {
+			var cfg   = CONFIG.watch[name]
+				, state = STATE.watch[name]
+				
+			var state = STATE.watch[name],
+					cfg   = CONFIG.watch[name];
+
+			if (state.pid) return;
+
+			// if `rate_limit` is set, don't restart the job more than once
+			// every X seconds
+			if(CONFIG.rate_limit) {
+				var now = (new Date).getTime();
+				if(now - state.last_restart < (CONFIG.rate_limit * 1000)) {
+					log(name+" was started less than "+CONFIG.rate_limit+" seconds ago, deferring");
+					return;
+				}
+			}
+
+			log(name+" is not running, restarting");
+
+			var c = spawn(name, cfg, state).on('exit', function () { delete state.pid });
+
+			if (cfg.notify) sendNotification("restarted", name, c.pid);
+			state.last_restart = (new Date).getTime();
+		});
+
+		// Kill any jobs that are no longer in the config but still running.
+		removed_jobs.forEach(function (name) {
+			if (STATE.watch[name] && STATE.watch[name].pid) process.kill(STATE.watch[name].pid)
+		});
+	}
+
+	/**
+	 * Run a scheduled job.  When the job completes, look for other jobs ("sub-jobs")
+	 * that should run after this one, and execute them.
+	 *
+	 * If a sub-job is already running, then it is completely bypassed for this
+	 * dispatch cycle.
+	 */
+	function run_job (name) {
+		var state = STATE.schedule[name],
+				cfg   = CONFIG.schedule[name];
+		if(state.running) return log("... "+name+" is still running, skipping");
+
+		if(cfg.args) cfg.args.forEach(function(it){
+			switch(it) {
+				case 'last_run': cfg.cmd += ' "' + dateFormat(state.last_run, "yyyy-mm-dd HH:MM:ss") + '"'; break;
+				default:         console.log("Unrecognized dyn arg: "+it);
+			}
+		});
+		state.running = true;
+
+		var c = spawn(name, cfg, state);
+		c.on('exit', function runAfter (code) {
+			// TODO - should sub-jobs run after failure?
+			// if (code) return
+
+			// find jobs that want to be run after this job, and execute them
+			Object.keys(CONFIG.schedule).forEach(function (next_job_name) {
+				var next_job = CONFIG.schedule[next_job_name];
+				var m = /^after (.*)$/.exec(next_job.when);
+				if (!m || m[1] != name) return;
+				run_job(next_job_name);
+			})
+		})
+	}
+
 }
 
 function sendNotification(kind, name, pid, body) {
-	body || (body = "")
 	new mailer.Mail({
 		to:       CONFIG.notify_email || CONFIG.email,
 		from:     CONFIG.from_email || CONFIG.email,
@@ -269,14 +270,14 @@ function sendNotification(kind, name, pid, body) {
  * Spawn a new process using the settings in `cfg` and return it.
  */
 function spawn(name, cfg, state) {
-	if (!(var cmd = cfg.cmd)) {
+	var cmd
+		, args;
+	if (!(cmd = cfg.cmd)) {
 		console.error('No "cmd" in ' + name + ' cfg: ' + util.format(cfg));
 		process.exit(2)
 	}
-	if (!(var args = cfg.args)) {
-		args = shellParse(cmd);
-		cmd = args.shift();
-	}
+	args = shellParse(cmd);
+	cmd = args.shift();
 	var cwd = cfg.cwd;
 
 	args.map(function (it) {
@@ -284,50 +285,30 @@ function spawn(name, cfg, state) {
 		return state.env[it.substring(1)] || ''
 	});
 
-	if((var output_file = cfg.output) && output_file !== state.output_file) {
+	var stdio = ['ignore']; // No stdin
+	if(cfg.output && cfg.output !== state.output) {
 		// redirect stdout/stderr into the file specified
 		// file will be opened in append mode
-		if (state.output) state.output.end()
-		state.output = fs.createWriteStream(output_file, {flags: 'a', mode: 0644})
-		state.output.on('error', function (err) {
-			console.error("Error writing output file: " + output_file, err)
-		}
-		state.output_file = output_file;
-		c.stdout.pipe(state.output)
-		c.stderr.pipe(state.output)
+		if (state.output_fd) fs.closeSync(state.output_fd)
+		state.output = cfg.output;
+		state.output_fd = fs.openSync(cfg.output, 'a')
+		stdio[1] = stdio[2] = state.output_fd;
+	} else if (!cfg.output) {
+		// open a temp file for stdout/stderr
+		var tmp_info = temp.openSync({prefix: name, suffix: '.log'});
+		state.output_fd = stdio[1] = stdio[2] = tmp_info.fd;
+		state.output = tmp_info.path;
 	}
 
-	var c = cproc.spawn(cmd, args, {env: state.env, cwd: cwd})
+	var c = cproc.spawn(cmd, args, {env: state.env, cwd: cwd, stdio: stdio})
+
 	state.pid = c.pid;
 	state.last_run = (new Date()).getTime();
-	log("Started " + name + "\n    pid: "+c.pid);
 	c.on('error', sendNotification.bind(null, "error", name, c.pid))
 	c.on('exit', function onExit (code) {
-		if (!code) return // A-ok!
-		sendNotification("error code " + code, name, c.pid)
-		console.error(name+": Gadzooks! Error!");
+		if (!code) return fs.closeSync(state.output_fd)
+		sendNotification("returned code " + code, name, c.pid, "Output is readable in " + state.ouput);
+		console.error("Gadzooks! Error! " + name);
 	})
 	return c;
-}
-
-function buffer_stderr(name, c, maxSize) {
-	maxSize = maxSize || 10 * 1024 * 1024;  // 10MB
-	var buffer = new Buffer(maxSize);
-		, position = 0;
-	c.stderr.on('data', function write (data) {
-		if (data.length + position < buffer.length) {
-			data.copy(buffer, position)
-			position += data.length
-			return
-		} 
-		var msg = "STDERR > 10MB:\n... " + buffer.slice(position - 1024, position) + data;
-		c.emit('error', msg);
-		buffer = new Buffer(maxSize);
-		position = 0;
-	})
-	c.on('exit', function(code) {
-		if (position > 0) {
-			sendNotification('returned output on stderr', name, c.pid, buffer.slice(0, position))
-		}
-	})
 }
