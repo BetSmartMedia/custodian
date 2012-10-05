@@ -232,8 +232,8 @@ function run (CONFIG, STATE) {
 	 * Send an email notification of an event
 	 */
 	function sendNotification(kind, name, pid, body) {
-		var from = CONFIG.from_email || CONFIG.email
-			, to = CONFIG.notify_email || CONFIG.email;
+		var from = CONFIG.from_email || CONFIG.admin
+			, to = CONFIG.notify_email || CONFIG.admin;
 
 		mailer.sendMail({
 			to:       to,
@@ -245,7 +245,7 @@ function run (CONFIG, STATE) {
 								(body ? "\n\n" + body : ""),
 		},
 		function (err, success) {
-			if (err) log("Failed to send mail to " + address + " " + err)
+			if (err) log("Failed to send mail to " + to + " " + err)
 			else log("Message sent to " + to)
 		});
 	}
