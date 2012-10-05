@@ -78,7 +78,7 @@ function main () {
 			if (!CONFIG.schedule) CONFIG.schedule = {}
 			if (!CONFIG.watch) CONFIG.watch = {}
 		} catch(e) {
-			console.error("Error reading config:", e.message);
+			log("Error reading config: " + e);
 			if (exitOnFailure) process.exit(1);
 		}
 	}
@@ -101,7 +101,6 @@ function main () {
 				process.exit(1);
 			}
 
-			// catch SIGTERM and remove PID file
 			process.on('exit', function() {
 				fs.unlinkSync(CONFIG.pid);
 				process.exit(0);
@@ -132,14 +131,8 @@ function init_state (CONFIG, STATE) {
 		for(var name in CONFIG[type]) {
 			delete remove[name];
 			var state = STATE[type][name] = STATE[type][name] || clone(init);
-			var env;
-			if (env = CONFIG[type][name].env) {
-				env.__proto__ = process.env;
-			} else {
-				env = process.env;
-			}
-			state.env = env;
-			//state.env.__proto__ = cfg_env;
+			state.env = CONFIG[type][name].env || {};
+			state.env.__proto__ = process.env;
 		}
 		for(var name in remove) delete STATE[type][name];
 	}
@@ -188,8 +181,7 @@ function run (CONFIG, STATE) {
 				delete state.process
 				delete state.timeout
 				log(name+" is not running, restarting");
-				spawn(name, cfg, state)
-				state.process.on('exit', restart);
+				spawn(name, cfg, state, sendNotification).on('exit', restart);
 			};
 
 			restart()
@@ -220,7 +212,7 @@ function run (CONFIG, STATE) {
 			}
 		});
 
-		spawn(name, cfg, state);
+		spawn(name, cfg, state, sendNotification);
 		state.process.on('exit', function runAfter (code) {
 			delete state.process;
 			// TODO - should sub-jobs run after failure?
@@ -234,6 +226,28 @@ function run (CONFIG, STATE) {
 				run_job(next_job_name);
 			})
 		})
+	}
+
+	/**
+	 * Send an email notification of an event
+	 */
+	function sendNotification(kind, name, pid, body) {
+		var from = CONFIG.from_email || CONFIG.email
+			, to = CONFIG.notify_email || CONFIG.email;
+
+		mailer.sendMail({
+			to:       to,
+			from:     from,
+			subject:  'Custodian | Process ' + kind + ' (' + name + ')',
+			text:     "Hostname: " + HOSTNAME +
+								"\nProcess: " + name +
+								"\nPID: "+ pid +
+								(body ? "\n\n" + body : ""),
+		},
+		function (err, success) {
+			if (err) log("Failed to send mail to " + address + " " + err)
+			else log("Message sent to " + to)
+		});
 	}
 
 	/**
@@ -267,42 +281,23 @@ function run (CONFIG, STATE) {
 	dispatch();
 }
 
-function sendNotification(kind, name, pid, body) {
-	var address = CONFIG.notify_email || CONFIG.email;
-	mailer.sendMail({
-		to:       address,
-		from:     CONFIG.from_email || CONFIG.email,
-		subject:  'Custodian | Process ' + kind + '(' + name + ')',
-		text:     "Hostname: " + HOSTNAME +
-							"\nProcess: " + name +
-							"\nPID: "+ pid +
-							(body ? "\n\n" + body : ""),
-	},
-	function (err, success) {
-		if (err) log("Failed to send mail to " + address + " " + err)
-		else log("Message sent to " + address)
-	});
-}
-
 /**
  * Spawn a new process using the settings in `cfg` and return it.
  */
-function spawn(name, cfg, state) {
-	var cmd
-		, args;
-	if (!(cmd = cfg.cmd)) {
-		console.error('No "cmd" in ' + name + ' cfg: ' + util.format(cfg));
-		process.exit(2)
+function spawn(name, cfg, state, sendNotification) {
+
+	if (!cfg.cmd) {
+		log('Error: No "cmd" in ' + name + ' cfg: ' + util.format(cfg));
 	}
-	args = shellParse(cmd);
-	cmd = args.shift();
-	var cwd = cfg.cwd || process.cwd();
 
-	args = args.map(function (it) {
-		if (it[0] !== '$') return it
-		return state.env[it.substring(1)] || ''
-	});
+	var args = shellParse(cfg.cmd)
+		, cmd = args.shift()
+		, cwd = cfg.cwd || process.cwd()
 
+	// Parse args and expand environment variables
+	args = args.map(function (arg) { return shellExpand(arg, state.env) });
+
+	// Prepare output redirection
 	var stdio = ['ignore']; // No stdin
 	if(cfg.output) {
 		if (cfg.output !== state.output) {
@@ -317,18 +312,35 @@ function spawn(name, cfg, state) {
 		stdio[1] = stdio[2] = 'ignore';
 	}
 
-	var c = state.process = cproc.spawn(cmd, args, {env: state.env, cwd: cwd, stdio: stdio})
+	var c = state.process = cproc.spawn(cmd, args, {
+		env: state.env,
+		cwd: cwd,
+		stdio: stdio
+	});
+
 	log("Started " + name + " (pid: " + c.pid + ")")
 	state.last_run = (new Date()).getTime();
 	c.on('error', sendNotification.bind(null, "error", name, c.pid))
 	c.on('exit', function onExit (code) {
 		log(name + ' finished with code ' + code)
+		if (state.output_fd) {
+			fs.closeSync(state.output_fd);
+			delete state.output_fd;
+		}
 		if (!code) {
 			// successful exit
-			if (state.output_fd) fs.closeSync(state.output_fd);
 			return
 		}
-		var body = state.output ? "Output is readable in " + state.ouput : null;
+		var body = state.output ? "Output is readable in " + state.ouput : "";
 		sendNotification("returned code " + code, name, c.pid, body);
+	})
+	return c;
+}
+
+function shellExpand (string, env) {
+	if (string[0] === "'") return string;
+	if (!env) env = process.env;
+	return string.replace(/\$([A-Za-z0-9_]+)/g, function (m) {
+		return env[m.substring(1)] || ''
 	})
 }
