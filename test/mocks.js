@@ -1,15 +1,64 @@
 /**
- * Specialized mocks for child processes and email for use in unit tests.
+ * Specialized mocks for:
+ *   - child processes
+ *   - sending email
+ *
+ * TODO - fork https://github.com/vojtajina/node-mocks and integrate these to
+ * make mocking filesystem operations possible.
  */
-util         = require('util')
-assert       = require('assert')
-EventEmitter = require('events').EventEmitter
-Stream       = require('stream').Stream
-shellQuote   = require('shell-quote').quote
+var util          = require('util')
+var assert        = require('assert')
+var child_process = require('child_process')
+var mailer        = require("nodemailer");
+var EventEmitter  = require('events').EventEmitter
+var Stream        = require('stream').Stream
+var shellQuote    = require('shell-quote').quote
 
-exports.FakeProcess = FakeProcess
-
+exports.FakeProcess   = FakeProcess
 exports.FakeTransport = FakeTransport
+
+exports.blankConfig = function () {
+	return {
+		email: 'test@example.com',
+		check_interval: 1,
+		schedule:{},
+		watch:{},
+	}
+}
+
+exports.blankState = function () { return { schedule:{}, watch:{} } }
+
+exports.spawnOpts = function (opts) {
+	var ret = {
+		env: {},
+		cwd: process.cwd(),
+		stdio: ['ignore', 'ignore', 'ignore']
+	}
+	if (opts) for (var k in opts) ret[k] = opts[k];
+	ret.env.__proto__ = process.env;
+	return ret;
+}
+
+var realCreateTransport = mailer.createTransport;
+var realSpawn = child_process.spawn;
+var installed = false;
+
+exports.install = function () {
+	if (installed) throw new Error("Mocks already installed, maybe you need to uninstall them after the previous test suite?")
+	mailer.createTransport = function () { return new FakeTransport };
+	child_process.spawn = function mockSpawn (cmd, args, opts) { return new FakeProcess(cmd, args, opts) };
+
+	// Clear custodian from require cache to ensure it loads mocked deps
+	delete require.cache[require.resolve('../custodian')]
+
+	installed = true
+}
+
+exports.uninstall = function () {
+	mailer.createTransport = realCreateTransport;
+	child_process.spawn = realSpawn;
+	installed = false;
+}
 
 function FakeProcess (cmd, args, opts) {
 
@@ -60,10 +109,25 @@ FakeProcess.finished = function (msg) {
 
 
 function FakeTransport () {
+	// singleton grosss
+	if (FakeTransport.inst) return FakeTransport.inst;
+
+	FakeTransport.inst = this;
+
 	var expected = [];
 
 	this.sendMail = function (opts) {
-		assert.deepEqual(opts, expected.shift());
+		var expectation = expected.shift();
+		if (!expectation) {
+			throw new Error("Unexpected call to sendMail: " + util.format(opts));
+		}
+		if (typeof expectation === 'function') return expectation(opts);
+
+		['to', 'from', 'subject', 'text'].forEach(function (key) {
+			assert.equal(opts.subject, expectation.subject)
+		})
+
+		console.log("ok - email is correct");
 	};
 
 	this.finished = function () {
@@ -74,3 +138,4 @@ function FakeTransport () {
 		expected.push(opts);
 	};
 }
+
