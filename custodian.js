@@ -13,7 +13,6 @@
  * Custodian also provides basic watchdog functionality. If a process is not
  * running, it will be restarted.
  */
-
 var util       = require("util");
 var cproc      = require("child_process");
 var fs         = require("fs");
@@ -63,9 +62,9 @@ function main () {
 
 	// catch SIGHUP and reload config
 	process.on('SIGHUP', function() {
-		console.log("Caught SIGHUP - reloading configuration");
+		log("SIGHUP - reloading configuration");
 		load_config();
-		init_state();
+		init_state(CONFIG, STATE);
 	});
 
 	/**
@@ -73,10 +72,14 @@ function main () {
 	 */
 	function load_config (exitOnFailure) {
 		try {
-			var c = fs.readFileSync(CFG_FILE, "utf8");
-			CONFIG = JSON.parse(c);
+			var newConfig = JSON.parse(fs.readFileSync(CFG_FILE, "utf8"));
+			// parsed ok, clobber old config
+			for (var k in CONFIG) delete CONFIG[k];
+			for (var k in newConfig) CONFIG[k] = newConfig[k];
 			if (!CONFIG.schedule) CONFIG.schedule = {}
 			if (!CONFIG.watch) CONFIG.watch = {}
+			// setTimeout avoids printing before daemonization we hope
+			setTimeout(log.bind(null, "config ok"), 1000)
 		} catch(e) {
 			log("Error reading config: " + e);
 			if (exitOnFailure) process.exit(1);
@@ -125,20 +128,29 @@ function init_state (CONFIG, STATE) {
 		return c;
 	}
 
-	function reload (type, init) {
-		var remove = {};
-		for(var name in STATE[type]) remove[name] = true;
-		for(var name in CONFIG[type]) {
-			delete remove[name];
-			var state = STATE[type][name] = STATE[type][name] || clone(init);
-			state.env = CONFIG[type][name].env || {};
-			state.env.__proto__ = process.env;
-		}
-		for(var name in remove) delete STATE[type][name];
-	}
+	['schedule', 'watch'].forEach(function (type) {
+		var state = STATE[type]
+			, config = CONFIG[type]
+			, init = {last_run: new Date("1980/01/01 00:00:00")};
 
-	reload('schedule', {running: false, last_run: new Date("1980/01/01 00:00:00")});
-	reload('watch',    {pid: 0, last_run: 0});
+		// Remove all state and kill jobs that are no longer in the config.
+		for (var name in state) {
+			if (!config[name]) {
+				// Clear restart timeout
+				if (state[name].timeout) clearTimeout(state[name].timeout)
+				// Kill running process
+				if (state[name].process) process.kill(state[name].process.pid);
+				delete state[name];
+			}
+		};
+
+		// Initialize state & env for remaining jobs
+		for(var name in config) {
+			var jobState = state[name] = state[name] || clone(init);
+			jobState.env = config[name].env || {};
+			jobState.env.__proto__ = process.env;
+		}
+	})
 }
 
 
@@ -155,11 +167,7 @@ function run (CONFIG, STATE) {
 	 */
 	function check_watched_jobs () {
 
-		var config_jobs = Object.keys(CONFIG.watch)
-			, is_stale = function (name) { return config_jobs.indexOf(name) === -1 }
-			, removed_jobs  = Object.keys(STATE.watch).filter(is_stale)
-
-		config_jobs.forEach(function (name) {
+		Object.keys(CONFIG.watch).forEach(function (name) {
 			var cfg   = CONFIG.watch[name]
 				, state = STATE.watch[name]
 				
@@ -167,9 +175,12 @@ function run (CONFIG, STATE) {
 			if (state.process || state.timeout) return;
 
 			function restart () {
+				// If we were removed from the config, just exit.
+				if (!CONFIG.watch[name]) return
+
 				// if `rate_limit` is set, don't restart the job more than once
 				// every X seconds
-				if(CONFIG.rate_limit) {
+				if (CONFIG.rate_limit) {
 					var now = (new Date).getTime()
 						, rate = CONFIG.rate_limit * 1000
 					if(now - state.last_run < rate) {
@@ -187,10 +198,6 @@ function run (CONFIG, STATE) {
 			restart()
 		});
 
-		// Kill any jobs that are no longer in the config but still running.
-		removed_jobs.forEach(function (name) {
-			if (STATE.watch[name] && STATE.watch[name].pid) process.kill(STATE.watch[name].process.pid)
-		});
 	}
 
 	/**
@@ -286,15 +293,16 @@ function run (CONFIG, STATE) {
  */
 function spawn(name, cfg, state, sendNotification) {
 
-	if (!cfg.cmd) {
-		log('Error: No "cmd" in ' + name + ' cfg: ' + util.format(cfg));
-	}
+	if (!cfg.cmd) return log('Error: No "cmd" in ' + name + ' cfg: ' + util.format(cfg));
 
+	// Backwards compatibility with old configs
+	if (Array.isArray(cfg.cmd)) cfg.cmd = cfg.cmd.join(' ');
+
+	// Parse args and expand environment variables
 	var args = shellParse(cfg.cmd)
 		, cmd = args.shift()
 		, cwd = cfg.cwd || process.cwd()
 
-	// Parse args and expand environment variables
 	args = args.map(function (arg) { return shellExpand(arg, state.env) });
 
 	// Prepare output redirection
@@ -305,13 +313,14 @@ function spawn(name, cfg, state, sendNotification) {
 			// file will be opened in append mode
 			if (state.output_fd) fs.closeSync(state.output_fd)
 			state.output = cfg.output;
-			state.output_fd = fs.openSync(cfg.output, 'a')
+			state.output_fd = fs.openSync(shellExpand(cfg.output), 'a')
 		}
 		stdio[1] = stdio[2] = state.output_fd;
 	} else {
 		stdio[1] = stdio[2] = 'ignore';
 	}
 
+	// Spawn the actual child process
 	var c = state.process = cproc.spawn(cmd, args, {
 		env: state.env,
 		cwd: cwd,
