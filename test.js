@@ -28,8 +28,8 @@ var tests = [
 		, STATE;
 
 	function done (message) {
-		FakeProcess.finished(message)
 		clearInterval(STATE.interval);
+		FakeProcess.finished(message)
 		nextTest()
 	}
 
@@ -166,10 +166,10 @@ function scheduledJobsRunRepeatedly (CONFIG, STATE, done) {
 function watchedJobRateLimiting (CONFIG, STATE, done) {
 	CONFIG.rate_limit = 0.01;
 	CONFIG.watch.only_twice = {
-		cmd: 'watch_me',
+		cmd: 'rate_limit',
 	}
 
-	var expectation = ['watch_me', [], {
+	var expectation = ['rate_limit', [], {
 		env: process.env,
 		cwd: process.cwd(),
 		stdio: ['ignore', 'ignore', 'ignore']
@@ -191,5 +191,5 @@ function watchedJobRateLimiting (CONFIG, STATE, done) {
 		clearTimeout(STATE.watch.only_twice.timeout)
 		clearInterval(exitInterval)
 		done("Restarts of watched jobs are rate-limited")
-	}, 15)
+	}, 12)
 }
