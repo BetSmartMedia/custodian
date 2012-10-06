@@ -361,7 +361,9 @@ function shellExpand (string, env) {
 	})
 }
 
-function checkMemoryUsage(name, limit, pid) {
+function checkMemoryUsage (name, limit, pid) {
+	var kb_limit = parseSize(limit);
+	if (!kb_limit) return;
 	cproc.exec('ps -o rss ' + pid, function (err, stdout, stderr) {
 		if (err) return log("Failed to get memory usage for " + name + " " + err)
 
@@ -369,10 +371,25 @@ function checkMemoryUsage(name, limit, pid) {
 
 		if (isNaN(rss)) return log("Failed to parse memory usage for " + name + " " + stdout)
 
-		if (rss > limit) {
+		if (rss > kb_limit) {
 			process.kill(pid)
 			log("Killed " + name + " for exceeding memory threshold: "
 					+ rss + " > " + limit);
 		}
 	})
+}
+
+/**
+ * Parse a size given in kilo/mega/gigabytes into a number of kilobytes
+ */
+function parseSize (size) {
+	var m = size.toLowerCase().match(/^(\d+)\s*(k|m|g)b?$/);
+	if (!m) return log('Invalid size: ' + size);
+	var n = Number(m[1])
+		, unit = m[2];
+	switch (unit) {
+		case 'k': return n;
+		case 'm': return n * 1024;
+		case 'g': return n * 1024 * 1024;
+	}
 }
