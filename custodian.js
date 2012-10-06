@@ -168,13 +168,19 @@ function run (CONFIG, STATE) {
 	function check_watched_jobs () {
 
 		Object.keys(CONFIG.watch).forEach(function (name) {
-			var cfg   = CONFIG.watch[name]
-				, state = STATE.watch[name]
+			var config   = CONFIG.watch[name]
+				, state = STATE.watch[name];
 				
-			// Already running or scheduled to run
-			if (state.process || state.timeout) return;
+			// If job is running
+			if (state.process) {
+				if (config.mem_limit) checkMemoryUsage(name, config.mem_limit, state.process.pid)
+				return
+			}
 
-			function restart () {
+			// Job is already scheduled to restart
+			if (state.timeout) return;
+
+			function restart (first) {
 				// If we were removed from the config, just exit.
 				if (!CONFIG.watch[name]) return
 
@@ -189,13 +195,14 @@ function run (CONFIG, STATE) {
 						return;
 					}
 				}
+
 				delete state.process
 				delete state.timeout
-				log(name+" is not running, restarting");
-				spawn(name, cfg, state, sendNotification).on('exit', restart);
+				if (!first) log(name + " is not running, restarting");
+				spawn(name, config, state, sendNotification).on('exit', restart);
 			};
 
-			restart()
+			restart(true)
 		});
 
 	}
@@ -351,5 +358,21 @@ function shellExpand (string, env) {
 	if (!env) env = process.env;
 	return string.replace(/\$([A-Za-z0-9_]+)/g, function (m) {
 		return env[m.substring(1)] || ''
+	})
+}
+
+function checkMemoryUsage(name, limit, pid) {
+	cproc.exec('ps -o rss ' + pid, function (err, stdout, stderr) {
+		if (err) return log("Failed to get memory usage for " + name + " " + err)
+
+		var rss = Number(stdout.split('\n').filter(Boolean).pop().trim())
+
+		if (isNaN(rss)) return log("Failed to parse memory usage for " + name + " " + stdout)
+
+		if (rss > limit) {
+			process.kill(pid)
+			log("Killed " + name + " for exceeding memory threshold: "
+					+ rss + " > " + limit);
+		}
 	})
 }
