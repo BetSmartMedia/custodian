@@ -12,174 +12,199 @@
  *
  * Custodian also provides basic watchdog functionality. If a process is not
  * running, it will be restarted.
- *
- * This code works on NodeJS 0.6.10.
  */
-
 var util       = require("util");
 var cproc      = require("child_process");
 var fs         = require("fs");
-var mailer     = require("./lib/node-mailer");
 var daemon     = require("daemon");
 var dateFormat = require("dateformat");
+
 var shellParse = require("shell-quote").parse;
 
 var VERSION  = require('./package.json').version;
+var mailer   = require("nodemailer").createTransport('sendmail');
 var HOSTNAME = require('os').hostname();
-var CFG_FILE = null;
 
-var CONFIG = {};
-var STATE  = {schedule:{}, watch:{}};
-
-process.env.IN_CUSTODIAN = 1
-
-/**
- * Read and parse config
- */
-if(process.argv.length < 3) {
-	console.error("Usage: node custodian.js <config_file>");
-	process.exit(1);
+if (require.main === module) {
+	var log = function (str) {
+		var now = dateFormat(new Date, "yyyy-mm-dd HH:MM:ss");
+		var msg = "[" + now + "] " + str;
+		console.log(msg);
+	};
+	main()
+} else {
+	// for unit tests
+	var log = function () {}
+	exports.run = run;
 }
 
-CFG_FILE = process.argv[2];
-load_config(true);
-
 /**
- * Run as a daemon or as a regular process
+ * This function encapsulate reading/reloading config files and application
+ * state then starts up the run loop.
  */
-if (CONFIG.daemon) {
-	// become a daemon
-	['log','pid'].map(function(d) {
-		if(!CONFIG[d]) {
-			console.error("Error: '"+d+"' directive must be specified when run as a daemon.");
-			process.exit(1);
-		}
-	});
-	daemon.daemonize(CONFIG.log, CONFIG.pid, function(err, pid) {
-		if(err) {
-			console.log("Error starting daemon: " + err);
-			process.exit(1);
-		}
+function main () {
+	/**
+	 * Read and parse config
+	 */
+	if(process.argv.length < 3) {
+		console.error("Usage: node custodian.js <config_file>");
+		process.exit(1);
+	}
 
-		// catch SIGTERM and remove PID file
-		process.on('SIGTERM', function() {
-			console.log("Caught SIGTERM - shutting down");
-			fs.unlinkSync(CONFIG.pid);
-			process.exit(0);
+	var CFG_FILE = process.argv[2];
+
+	var CONFIG = {};
+	var STATE  = {schedule:{}, watch:{}};
+
+	process.env.IN_CUSTODIAN = 1
+
+	load_config(true);
+
+	// catch SIGHUP and reload config
+	process.on('SIGHUP', function() {
+		log("SIGHUP - reloading configuration");
+		load_config();
+		init_state(CONFIG, STATE);
+	});
+
+	/**
+	 * Load configuration
+	 */
+	function load_config (exitOnFailure) {
+		try {
+			var newConfig = JSON.parse(fs.readFileSync(CFG_FILE, "utf8"));
+			// parsed ok, clobber old config
+			for (var k in CONFIG) delete CONFIG[k];
+			for (var k in newConfig) CONFIG[k] = newConfig[k];
+			if (!CONFIG.schedule) CONFIG.schedule = {}
+			if (!CONFIG.watch) CONFIG.watch = {}
+			// setTimeout avoids printing before daemonization we hope
+			setTimeout(log.bind(null, "config ok"), 1000)
+		} catch(e) {
+			log("Error reading config: " + e);
+			if (exitOnFailure) process.exit(1);
+		}
+	}
+
+	/**
+	 * Run as a daemon or as a regular process
+	 */
+	if (CONFIG.daemon) {
+		// become a daemon
+		['log','pid'].forEach(function(d) {
+			if(!CONFIG[d]) {
+				console.error("Error: '"+d+"' directive must be specified when run as a daemon.");
+				process.exit(1);
+			}
 		});
 
-		run();
-	});
-} else {
-	// ... or run as a regular process
-	run();
-}
+		daemon.daemonize(CONFIG.log, CONFIG.pid, function(err, pid) {
+			if(err) {
+				console.log("Error starting daemon: " + err);
+				process.exit(1);
+			}
 
-// catch SIGHUP and reload config
-process.on('SIGHUP', function() {
-	console.log("Caught SIGHUP - reloading configuration");
-	load_config();
-	init_state();
-});
+			process.on('exit', function() {
+				fs.unlinkSync(CONFIG.pid);
+				process.exit(0);
+			});
 
-
-/**
- * Load configuration
- */
-function load_config(exitOnFailure) {
-	try {
-		var c = fs.readFileSync(CFG_FILE, "utf8");
-		CONFIG = JSON.parse(c);
-	} catch(e) {
-		console.error("Error reading config:", e.message);
-		if (exitOnFailure) process.exit(1);
+			run(CONFIG, STATE);
+		});
+	} else {
+		// ... or run as a regular process
+		run(CONFIG, STATE);
 	}
 }
+
 
 /**
  * Initialize (or re-initialize) state
  */
-function init_state() {
+function init_state (CONFIG, STATE) {
 	function clone (o) {
 		var c = {};
 		for(var x in o) c[x] = o[x];
 		return c;
 	}
 
-	function reload (type, init) {
-		var remove = {};
-		for(var name in STATE[type]) remove[name] = true;
-		for(var name in CONFIG[type]) {
-			delete remove[name];
-			var state = STATE[type][name] || clone(init)
-			if (var cfg_env = CONFIG[type][name].env) {
-				cfg_env.__proto__ = process.env;
-			} else {
-				cfg_env = process.env;
+	['schedule', 'watch'].forEach(function (type) {
+		var state = STATE[type]
+			, config = CONFIG[type]
+			, init = {last_run: new Date("1980/01/01 00:00:00")};
+
+		// Remove all state and kill jobs that are no longer in the config.
+		for (var name in state) {
+			if (!config[name]) {
+				// Clear restart timeout
+				if (state[name].timeout) clearTimeout(state[name].timeout)
+				// Kill running process
+				if (state[name].process) process.kill(state[name].process.pid);
+				delete state[name];
 			}
-			state.env = state.env || {};
-			state.env.__proto__ = cfg_env;
+		};
+
+		// Initialize state & env for remaining jobs
+		for(var name in config) {
+			var jobState = state[name] = state[name] || clone(init);
+			jobState.env = config[name].env || {};
+			jobState.env.__proto__ = process.env;
 		}
-		for(var name in remove) delete STATE[type][name];
-	}
-
-	reload('schedule', {running: false, last_run: new Date("1980/01/01 00:00:00")});
-	reload('watch',    {pid: 0, last_restart: 0});
+	})
 }
 
-function log(str) {
-	var now = dateFormat(new Date, "yyyy-mm-dd HH:MM:ss");
-	var msg = "[" + now + "] " + str;
-	console.log(msg);
-}
 
 /**
  * Main mojo
  */
-function run() {
-	// init state
-	init_state();
+function run (CONFIG, STATE) {
+	log("Custodian v"+VERSION+" starting...");
+	init_state(CONFIG, STATE)
 
 	/**
-	 * Watch any active jobs in STATE.watch.
+	 * Check on the jobs in CONFIG.watch, restarting those that aren't running, and
+	 * killing those that are no longer in the config.
 	 */
-	function watch_jobs() {
-		function chkpid (p, cb) {
-			if(p < 1) return cb(false);
+	function check_watched_jobs () {
 
-			cproc.exec('ps -p '+p, function(err, stdout, stderr){
-				cb(err ? false : true);
-			});
-		};
+		Object.keys(CONFIG.watch).forEach(function (name) {
+			var config   = CONFIG.watch[name]
+				, state = STATE.watch[name];
+				
+			// If job is running
+			if (state.process) {
+				if (config.mem_limit) checkMemoryUsage(name, config.mem_limit, state.process.pid)
+				return
+			}
 
-		for(var name in STATE.watch) (function(name){
-			chkpid(STATE.watch[name].pid, function(is_running){
-				var state = STATE.watch[name],
-				    cfg   = CONFIG.watch[name];
+			// Job is already scheduled to restart
+			if (state.timeout) return;
 
-				// if the config entry no longer exists, then it was probably removed
-				// and we were SIGHUP'ed.
-				if(cfg == undefined) return;
-
-				if(is_running) return;
+			function restart (first) {
+				// If we were removed from the config, just exit.
+				if (!CONFIG.watch[name]) return
 
 				// if `rate_limit` is set, don't restart the job more than once
 				// every X seconds
-				if(CONFIG.rate_limit) {
-					var now = (new Date).getTime();
-					if(now - state.last_restart < (CONFIG.rate_limit * 1000)) {
+				if (CONFIG.rate_limit) {
+					var now = (new Date).getTime()
+						, rate = CONFIG.rate_limit * 1000
+					if(now - state.last_run < rate) {
 						log(name+" was started less than "+CONFIG.rate_limit+" seconds ago, deferring");
+						state.timeout = setTimeout(restart, (rate + state.last_run) - now)
 						return;
 					}
 				}
 
-				log(name+" is not running, restarting");
+				delete state.process
+				delete state.timeout
+				if (!first) log(name + " is not running, restarting");
+				spawn(name, config, state, sendNotification).on('exit', restart);
+			};
 
-				var c = spawn(name, cfg, state)
-				if(cfg.notify) sendNotification("restarted", name, c.pid)
-				state.last_restart = (new Date).getTime();
-			});
-		})(name);
+			restart(true)
+		});
+
 	}
 
 	/**
@@ -189,23 +214,21 @@ function run() {
 	 * If a sub-job is already running, then it is completely bypassed for this
 	 * dispatch cycle.
 	 */
-	function run_job(name) {
+	function run_job (name) {
 		var state = STATE.schedule[name],
 				cfg   = CONFIG.schedule[name];
-		if(state.running) return log("... "+name+" is still running, skipping");
+		if(state.process) return log("... "+name+" is still running, skipping");
 
-		var cmd = cfg.cmd;
 		if(cfg.args) cfg.args.forEach(function(it){
 			switch(it) {
-				case 'last_run': cmd += ' "' + dateFormat(state.last_run, "yyyy-mm-dd HH:MM:ss") + '"'; break;
+				case 'last_run': cfg.cmd += ' "' + dateFormat(state.last_run, "yyyy-mm-dd HH:MM:ss") + '"'; break;
 				default:         console.log("Unrecognized dyn arg: "+it);
 			}
 		});
-		state.running = true;
 
-		var c = spawn(name, cfg, state);
-		buffer_stderr(c);
-		c.on('exit', function(code) {
+		spawn(name, cfg, state, sendNotification);
+		state.process.on('exit', function runAfter (code) {
+			delete state.process;
 			// TODO - should sub-jobs run after failure?
 			// if (code) return
 
@@ -220,14 +243,34 @@ function run() {
 	}
 
 	/**
-	 * Run jobs that should execute every X seconds
+	 * Send an email notification of an event
 	 */
-	function dispatch() {
+	function sendNotification(kind, name, pid, body) {
+		var from = CONFIG.from_email || CONFIG.admin
+			, to = CONFIG.notify_email || CONFIG.admin;
+
+		mailer.sendMail({
+			to:       to,
+			from:     from,
+			subject:  'Custodian | Process ' + kind + ' (' + name + ')',
+			text:     "Hostname: " + HOSTNAME +
+								"\nProcess: " + name +
+								"\nPID: "+ pid +
+								(body ? "\n\n" + body : ""),
+		},
+		function (err, success) {
+			if (err) log("Failed to send mail to " + to + " " + err)
+			else log("Message sent to " + to)
+		});
+	}
+
+	/**
+	 * Check watched jobs and run any scheduled jobs every 5 seconds
+	 */
+	function dispatch () {
 		var now = new Date();
 
-		// wrapping the guts of the loop in a function forces earlier
-		// scope binding, which fixes the closures-in-loops gotcha.
-		for(var x in CONFIG.schedule) (function(x){
+		Object.keys(CONFIG.schedule).forEach(function (x) {
 			var m = /^every (.*)([smhd])$/.exec(CONFIG.schedule[x].when);
 			if(!m) return;
 
@@ -241,93 +284,112 @@ function run() {
 			if(STATE.schedule[x].last_run <= new Date(now - (m[1] * mult * 1000))) {
 				run_job(x);
 			}
-		})(x);
+		})
 
-		watch_jobs();
+		check_watched_jobs();
+
 	}
 
-	log("Custodian v"+VERSION+" starting...");
+	var interval = CONFIG.check_interval || 5000
+	STATE.interval = setInterval(dispatch, interval);
 	dispatch();
-	setInterval(dispatch, 5000);  // every 5 seconds
-}
-
-function sendNotification(kind, name, pid, body) {
-	body || (body = "")
-	new mailer.Mail({
-		to:       CONFIG.notify_email || CONFIG.email,
-		from:     CONFIG.from_email || CONFIG.email,
-		subject:  'Custodian | Process ' + kind + '(' + name + ')',
-		body:     "Hostname: " + HOSTNAME +
-							"\nProcess: " + name +
-							"\nPID: "+ pid +
-							(body ? "\n\n" + body : ""),
-		callback: function(err, data){}
-	});
 }
 
 /**
  * Spawn a new process using the settings in `cfg` and return it.
  */
-function spawn(name, cfg, state) {
-	if (!(var cmd = cfg.cmd)) {
-		console.error('No "cmd" in ' + name + ' cfg: ' + util.format(cfg));
-		process.exit(2)
-	}
-	if (!(var args = cfg.args)) {
-		args = shellParse(cmd);
-		cmd = args.shift();
-	}
-	var cwd = cfg.cwd;
+function spawn(name, cfg, state, sendNotification) {
 
-	args.map(function (it) {
-		if (it[0] !== '$') return it
-		return state.env[it.substring(1)] || ''
+	if (!cfg.cmd) return log('Error: No "cmd" in ' + name + ' cfg: ' + util.format(cfg));
+
+	// Backwards compatibility with old configs
+	if (Array.isArray(cfg.cmd)) cfg.cmd = cfg.cmd.join(' ');
+
+	// Parse args and expand environment variables
+	var args = shellParse(cfg.cmd)
+		, cmd = args.shift()
+		, cwd = cfg.cwd || process.cwd()
+
+	args = args.map(function (arg) { return shellExpand(arg, state.env) });
+
+	// Prepare output redirection
+	var stdio = ['ignore']; // No stdin
+	if(cfg.output) {
+		if (cfg.output !== state.output) {
+			// redirect stdout/stderr into the file specified
+			// file will be opened in append mode
+			if (state.output_fd) fs.closeSync(state.output_fd)
+			state.output = cfg.output;
+			state.output_fd = fs.openSync(shellExpand(cfg.output), 'a')
+		}
+		stdio[1] = stdio[2] = state.output_fd;
+	} else {
+		stdio[1] = stdio[2] = 'ignore';
+	}
+
+	// Spawn the actual child process
+	var c = state.process = cproc.spawn(cmd, args, {
+		env: state.env,
+		cwd: cwd,
+		stdio: stdio
 	});
 
-	if((var output_file = cfg.output) && output_file !== state.output_file) {
-		// redirect stdout/stderr into the file specified
-		// file will be opened in append mode
-		if (state.output) state.output.end()
-		state.output = fs.createWriteStream(output_file, {flags: 'a', mode: 0644})
-		state.output.on('error', function (err) {
-			console.error("Error writing output file: " + output_file, err)
-		}
-		state.output_file = output_file;
-		c.stdout.pipe(state.output)
-		c.stderr.pipe(state.output)
-	}
-
-	var c = cproc.spawn(cmd, args, {env: state.env, cwd: cwd})
-	state.pid = c.pid;
+	log("Started " + name + " (pid: " + c.pid + ")")
 	state.last_run = (new Date()).getTime();
-	log("Started " + name + "\n    pid: "+c.pid);
 	c.on('error', sendNotification.bind(null, "error", name, c.pid))
 	c.on('exit', function onExit (code) {
-		if (!code) return // A-ok!
-		sendNotification("error code " + code, name, c.pid)
-		console.error(name+": Gadzooks! Error!");
+		log(name + ' finished with code ' + code)
+		if (state.output_fd) {
+			fs.closeSync(state.output_fd);
+			delete state.output_fd;
+		}
+		if (!code) {
+			// successful exit
+			return
+		}
+		var body = state.output ? "Output is readable in " + state.ouput : "";
+		sendNotification("returned code " + code, name, c.pid, body);
 	})
 	return c;
 }
 
-function buffer_stderr(name, c, maxSize) {
-	maxSize = maxSize || 10 * 1024 * 1024;  // 10MB
-	var buffer = new Buffer(maxSize);
-		, position = 0;
-	c.stderr.on('data', function write (data) {
-		if (data.length + position < buffer.length) {
-			data.copy(buffer, position)
-			position += data.length
-			return
-		} 
-		var msg = "STDERR > 10MB:\n... " + buffer.slice(position - 1024, position) + data;
-		c.emit('error', msg);
-		buffer = new Buffer(maxSize);
-		position = 0;
+function shellExpand (string, env) {
+	if (string[0] === "'") return string;
+	if (!env) env = process.env;
+	return string.replace(/\$([A-Za-z0-9_]+)/g, function (m) {
+		return env[m.substring(1)] || ''
 	})
-	c.on('exit', function(code) {
-		if (position > 0) {
-			sendNotification('returned output on stderr', name, c.pid, buffer.slice(0, position))
+}
+
+function checkMemoryUsage (name, limit, pid) {
+	var kb_limit = parseSize(limit);
+	if (!kb_limit) return;
+	cproc.exec('ps -o rss ' + pid, function (err, stdout, stderr) {
+		if (err) return log("Failed to get memory usage for " + name + " " + err)
+
+		var rss = Number(stdout.split('\n').filter(Boolean).pop().trim())
+
+		if (isNaN(rss)) return log("Failed to parse memory usage for " + name + " " + stdout)
+
+		if (rss > kb_limit) {
+			process.kill(pid)
+			log("Killed " + name + " for exceeding memory threshold: "
+					+ rss + " > " + limit);
 		}
 	})
+}
+
+/**
+ * Parse a size given in kilo/mega/gigabytes into a number of kilobytes
+ */
+function parseSize (size) {
+	var m = size.toLowerCase().match(/^(\d+)\s*(k|m|g)b?$/);
+	if (!m) return log('Invalid size: ' + size);
+	var n = Number(m[1])
+		, unit = m[2];
+	switch (unit) {
+		case 'k': return n;
+		case 'm': return n * 1024;
+		case 'g': return n * 1024 * 1024;
+	}
 }
