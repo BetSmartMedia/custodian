@@ -23,7 +23,7 @@ complete, you want to perform some post-processing actions on it.
 This is an ideal use case for Custodian.  You can accomplish this with the
 following configuration excerpt:
 
-```
+```json
 {
 	"schedule": {
 		"etl":       {"cmd":"etl.js", "when":"every 60s"},
@@ -38,7 +38,7 @@ following configuration excerpt:
 This excerpt will log all output from the watch_me.sh script to a file. If
 the script dies, it will restart it and notify the administrator.
 
-```
+```json
 {
 	"admin": "admin@example.com",
 
@@ -52,3 +52,37 @@ the script dies, it will restart it and notify the administrator.
 }
 ```
 
+### Example: Environment variables
+
+To set environment variables that will apply to all jobs, you can use the
+"env" key in your configuration:
+
+```json
+{
+	"env": {
+		"API_KEY": "abcdef1234567890"
+	}
+}
+```
+
+You can also specify environment variables inside `"schedule"` and `"watch"`
+jobs:
+
+```json
+{
+	"env": {
+		"API_KEY": "abcdef1234567890"
+	},
+	"watch": {
+		"web-server": {
+			"cmd": "npm start myapp",
+			"env": {
+				"PORT": 1234
+			}
+		}
+	}
+}
+```
+
+Configuration environment variables override pre-existing environment variables,
+and job-specific variables override both.
