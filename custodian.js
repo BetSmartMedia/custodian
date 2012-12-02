@@ -271,17 +271,10 @@ function run (CONFIG, STATE) {
 		var now = new Date();
 
 		Object.keys(CONFIG.schedule).forEach(function (x) {
-			var m = /^every (.*)([smhd])$/.exec(CONFIG.schedule[x].when);
-			if(!m) return;
-
-			switch(m[2]) {
-				case 's': var mult = 1;    break;
-				case 'm': var mult = 60;   break;
-				case 'h': var mult = 3600; break;
-				case 'd': var mult = 86400;
-			}
-
-			if(STATE.schedule[x].last_run <= new Date(now - (m[1] * mult * 1000))) {
+			var when = CONFIG.schedule[x].when
+			var delay = parseDuration(when)
+			if (!delay) return
+			if(STATE.schedule[x].last_run <= new Date(now - delay)) {
 				run_job(x);
 			}
 		})
@@ -391,5 +384,20 @@ function parseSize (size) {
 		case 'k': return n;
 		case 'm': return n * 1024;
 		case 'g': return n * 1024 * 1024;
+	}
+}
+
+function parseDuration (dur) {
+	var m = /^every ([\d.]+)([smhd])$/.exec(dur);
+	if (!m) throw new Error("Invalid duration " + dur)
+
+	var n = Number(m[1])
+	if (isNaN(n)) throw new Error("Invalid duration " + dur)
+
+	switch(m[2]) {
+		case 's': return 1000 * n
+		case 'm': return 60000 * n
+		case 'h': return 3600000 * n
+		case 'd': return 86400000 * n
 	}
 }
