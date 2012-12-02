@@ -23,6 +23,7 @@ exports.blankConfig = function () {
 		check_interval: 1,
 		schedule:{},
 		watch:{},
+		env: {}
 	}
 }
 

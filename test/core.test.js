@@ -83,13 +83,14 @@ exports.argumentsAreParsed = function (CONFIG, STATE, done) {
 
 
 exports.argumentsFromEnvironment = function (CONFIG, STATE, done) {
+	CONFIG.env.one = "one"
 	CONFIG.schedule.env_vars_test = {
-		cmd: 'do_something --with-option $two',
+		cmd: 'do_something --with-option $two $one',
 		when: "every 1d",
 		env: {two: 'two from environment'}
 	}
 
-	FakeProcess.expect(['do_something', ['--with-option', 'two from environment'], spawnOpts({'env': {'two': 'two from environment'}})]);
+	FakeProcess.expect(['do_something', ['--with-option', 'two from environment', 'one'], spawnOpts({'env': {'two': 'two from environment'}})]);
 
 	run(CONFIG, STATE);
 

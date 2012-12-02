@@ -78,6 +78,8 @@ function main () {
 			for (var k in newConfig) CONFIG[k] = newConfig[k];
 			if (!CONFIG.schedule) CONFIG.schedule = {}
 			if (!CONFIG.watch) CONFIG.watch = {}
+			if (!CONFIG.env) CONFIG.env = {}
+			CONFIG.env.__proto__ = process.env
 			// setTimeout avoids printing before daemonization we hope
 			setTimeout(log.bind(null, "config ok"), 1000)
 		} catch(e) {
@@ -148,7 +150,7 @@ function init_state (CONFIG, STATE) {
 		for(var name in config) {
 			var jobState = state[name] = state[name] || clone(init);
 			jobState.env = config[name].env || {};
-			jobState.env.__proto__ = process.env;
+			jobState.env.__proto__ = CONFIG.env;
 		}
 	})
 }
