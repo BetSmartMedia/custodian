@@ -340,7 +340,7 @@ function spawn(name, cfg, state, sendNotification) {
 			// successful exit
 			return
 		}
-		var body = state.output ? "Output is readable in " + state.ouput : "";
+		var body = state.output ? "Output is readable in " + state.output : "";
 		sendNotification("returned code " + code, name, c.pid, body);
 	})
 	return c;
