@@ -77,7 +77,7 @@ function FakeProcess (cmd, args, opts) {
 	this.opts   = opts;
 	this.stdout = new Stream;
 	this.stderr = new Stream;
-	this.pid    = FakeProcess.pid++;
+	this.pid    = ++FakeProcess.pid;
 
 	var self = this;
 	this.exit = function (code) {

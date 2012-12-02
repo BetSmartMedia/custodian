@@ -1,3 +1,4 @@
+var assert        = require('assert')
 var mocks         = require('./mocks')
 var FakeProcess   = mocks.FakeProcess
 var FakeTransport = mocks.FakeTransport
@@ -161,8 +162,8 @@ exports.watchedJobRateLimiting = function (CONFIG, STATE, done) {
 
 	// After 15ms the job should have started twice
 	setTimeout(function () {
-		clearTimeout(STATE.watch.only_twice.timeout)
 		clearInterval(exitInterval)
+		clearTimeout(STATE.watch.only_twice.timeout)
 		done("Restarts of watched jobs are rate-limited")
 	}, 12)
 }
@@ -195,5 +196,25 @@ exports.nonZeroExitIsReported = function (CONFIG, STATE, done) {
 	})
 }
 
+
+
+exports.maxtimeKill = function (CONFIG, STATE, done) {
+	CONFIG.schedule.schedule_test = {
+		cmd: 'do_something',
+		when: "every 1d",
+		maxtime: '0.01s'
+	}
+
+	var kill = process.kill
+	process.kill = function (pid) {
+		process.kill = kill
+		assert.equal(pid, FakeProcess.pid)
+		done('Process is killed when maxtime is reached')
+	}
+
+	FakeProcess.expect(['do_something', [], spawnOpts()])
+
+	run(CONFIG, STATE);
+}
 /* Helpers */
 var nextTick = process.nextTick;

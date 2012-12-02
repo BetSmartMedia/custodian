@@ -271,8 +271,9 @@ function run (CONFIG, STATE) {
 		var now = new Date();
 
 		Object.keys(CONFIG.schedule).forEach(function (x) {
-			var when = CONFIG.schedule[x].when
-			var delay = parseDuration(when)
+			var m = /^every ([\d.]+[smhd])$/.exec(CONFIG.schedule[x].when);
+			if (!m) return
+			var delay = parseDuration(m[1])
 			if (!delay) return
 			if(STATE.schedule[x].last_run <= new Date(now - delay)) {
 				run_job(x);
@@ -329,12 +330,22 @@ function spawn(name, cfg, state, sendNotification) {
 
 	log("Started " + name + " (pid: " + c.pid + ")")
 	state.last_run = (new Date()).getTime();
+
+	var maxtime
+	if (cfg.maxtime && (maxtime = parseDuration(cfg.maxtime))) {
+		state.killtimer = setTimeout(function () { process.kill(c.pid) }, maxtime) 
+	}
+
 	c.on('error', sendNotification.bind(null, "error", name, c.pid))
 	c.on('exit', function onExit (code) {
 		log(name + ' finished with code ' + code)
 		if (state.output_fd) {
 			fs.closeSync(state.output_fd);
 			delete state.output_fd;
+		}
+		if (state.killtimer) {
+			clearTimeout(state.killtimer);
+			delete state.killtimer
 		}
 		if (!code) {
 			// successful exit
@@ -388,7 +399,7 @@ function parseSize (size) {
 }
 
 function parseDuration (dur) {
-	var m = /^every ([\d.]+)([smhd])$/.exec(dur);
+	var m = /^([\d.]+)([smhd])$/.exec(dur);
 	if (!m) throw new Error("Invalid duration " + dur)
 
 	var n = Number(m[1])
