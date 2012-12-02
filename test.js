@@ -49,4 +49,3 @@ function isTestName (name) {
 		&& name !== 'beforeEach'
 		&& name !== 'afterEach';
 }
-
