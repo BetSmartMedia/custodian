@@ -86,3 +86,22 @@ jobs:
 
 Configuration environment variables override pre-existing environment variables,
 and job-specific variables override both.
+
+### Example: Killing jobs that run too long
+
+Suppose you have a job that occasionally hangs, you can specify the "maxtime"
+parameter and custodian will kill the process if it runs beyond it's limit:
+
+```json
+{
+	"schedule": {
+		"my-job": {
+			"cmd": "do a thing that sometimes fails",
+			"maxtime": "10s"
+		}
+	}
+}
+```
+
+Now if `my-job` runs more than 10 seconds, custodian will kill it for us.
+Another interesting use of "maxtime" is to periodically restart watched jobs.
