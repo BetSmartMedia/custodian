@@ -311,13 +311,12 @@ function spawn(name, cfg, state, sendNotification) {
 	// Prepare output redirection
 	var stdio = ['ignore']; // No stdin
 	if(cfg.output) {
-		if (cfg.output !== state.output) {
-			// redirect stdout/stderr into the file specified
-			// file will be opened in append mode
-			if (state.output_fd) fs.closeSync(state.output_fd)
-			state.output = cfg.output;
-			state.output_fd = fs.openSync(shellExpand(cfg.output), 'a')
-		}
+		// redirect stdout/stderr into the file specified
+		// file will be opened in append mode
+		if (state.output_fd) fs.closeSync(state.output_fd)
+		state.output = cfg.output;
+		state.output_fd = fs.openSync(shellExpand(cfg.output), 'a')
+
 		stdio[1] = stdio[2] = state.output_fd;
 	} else {
 		stdio[1] = stdio[2] = 'ignore';
