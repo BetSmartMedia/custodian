@@ -334,7 +334,10 @@ function spawn(name, cfg, state, sendNotification) {
 
 	var maxtime
 	if (cfg.maxtime && (maxtime = parseDuration(cfg.maxtime))) {
-		state.killtimer = setTimeout(function () { process.kill(c.pid) }, maxtime) 
+		state.killtimer = setTimeout(function () {
+			process.kill(c.pid)
+			log('Killed ' + name + " (pid: " + c.pid + ') for exceeding maxtime of ' + cfg.maxtime)
+		}, maxtime)
 	}
 
 	c.on('error', sendNotification.bind(null, "error", name, c.pid))
