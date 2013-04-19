@@ -2,11 +2,11 @@
   "author": "Judd Vinet <judd@betsmartmedia.com>",
   "name": "custodian",
   "description": "A process watchdog and command scheduler",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "main": "custodian.js",
   "bin": "custodian.js",
   "engines": {
-    "node": ">=0.6.0 <0.9.0"
+    "node": ">=0.8.0 <0.11.0"
   },
   "scripts": {
     "test": "node test.js"
@@ -17,7 +17,7 @@
   },
   "dependencies": {
     "dateformat":  "",
-    "daemon":      "0.4.1",
+    "daemon":      "1.1.0",
     "nodemailer":  "~0.3.28",
     "shell-quote": "0.0.1"
   },

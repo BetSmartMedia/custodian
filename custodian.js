@@ -100,23 +100,26 @@ function main () {
 			}
 		});
 
-		daemon.daemonize(CONFIG.log, CONFIG.pid, function(err, pid) {
-			if(err) {
-				console.log("Error starting daemon: " + err);
-				process.exit(1);
-			}
+		var fp = fs.openSync(CONFIG.log, 'a') || process.exit(1);
+		var opts = {
+			stdout: fp,
+			stderr: fp
+		}
 
-			process.on('exit', function() {
-				fs.unlinkSync(CONFIG.pid);
-				process.exit(0);
-			});
+		// Daemonize. At this point, the parent will exit.
+		daemon(opts);
 
-			run(CONFIG, STATE);
+		// Write PID file
+		fs.writeFile(CONFIG.pid, process.pid);
+
+		process.on('SIGTERM', function() {
+			log("Received SIGERM, exiting");
+			fs.unlinkSync(CONFIG.pid);
+			process.exit(0);
 		});
-	} else {
-		// ... or run as a regular process
-		run(CONFIG, STATE);
 	}
+
+	run(CONFIG, STATE);
 }
 
 
