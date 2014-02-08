@@ -92,7 +92,7 @@ function main() {
 	/**
 	 * Run as a daemon or as a regular process
 	 */
-	if (CONFIG.daemon) {
+	if(CONFIG.daemon) {
 		// become a daemon
 		['log','pid'].forEach(function(d) {
 			if(!CONFIG[d]) {
@@ -172,7 +172,6 @@ function run(CONFIG, STATE) {
 	 * killing those that are no longer in the config.
 	 */
 	function check_watched_jobs() {
-
 		Object.keys(CONFIG.watch).forEach(function(name) {
 			var config = CONFIG.watch[name]
 				, state  = STATE.watch[name];
@@ -210,7 +209,6 @@ function run(CONFIG, STATE) {
 
 			restart(true);
 		});
-
 	}
 
 	/**
@@ -220,7 +218,7 @@ function run(CONFIG, STATE) {
 	 * If a sub-job is already running, then it is completely bypassed for this
 	 * dispatch cycle.
 	 */
-	function run_job (name) {
+	function run_job(name) {
 		var state = STATE.schedule[name],
 				cfg   = CONFIG.schedule[name];
 		if(state.process) return log("... "+name+" is still running, skipping");
@@ -242,35 +240,69 @@ function run(CONFIG, STATE) {
 			Object.keys(CONFIG.schedule).forEach(function(next_job_name) {
 				var next_job = CONFIG.schedule[next_job_name];
 				var m = /^after (.*)$/.exec(next_job.when);
-				if (!m || m[1] != name) return;
+				if(!m || m[1] != name) return;
 				run_job(next_job_name);
 			});
 		});
 	}
 
 	/**
-	 * Send an email notification of an event
+	 * Send an email notification of an event. If `notify_limit` is set, then
+	 * notifications will be batched such that a notification for any given event
+	 * will not be sent more than once per X seconds.
 	 */
+	var pendingNotifications = {};
 	function sendNotification(kind, name, pid, body) {
 		var from = CONFIG.from_email || CONFIG.admin_email || CONFIG.admin
-			, to = CONFIG.notify_email || CONFIG.admin_email || CONFIG.admin;
+			, to = CONFIG.notify_email || CONFIG.admin_email || CONFIG.admin || from
+			, subject = 'Custodian | Process ' + kind + ' (' + name + ')';
 
-		mailer.sendMail({
-			to:      to,
-			from:    from,
-			subject: 'Custodian | Process ' + kind + ' (' + name + ')',
-			text:    "Hostname: " + HOSTNAME +
-			         "\nProcess: " + name +
-			         "\nPID: "+ pid +
-			         (body ? "\n\n" + body : ""),
-		},
-		function(err, success) {
-			if(err) {
-				log("Failed to send mail to " + to + " " + err);
-			} else {
-				log("Message sent to " + to);
+		var text = "Hostname: " + HOSTNAME +
+		           "\nProcess: " + name +
+		           "\nPID: "+ pid +
+		           (body ? "\n\n" + body : "");
+
+		var send = function(to, from, subject, text) {
+			mailer.sendMail({
+				to:      to,
+				from:    from,
+				subject: subject,
+				text:    text
+			},
+			function(err, success) {
+				if(err) {
+					log("Failed to send mail to " + to + " " + err);
+				} else {
+					log("Message sent to " + to);
+				}
+			});
+		};
+
+		if(typeof CONFIG.notify_limit === 'undefined' || CONFIG.notify_limit <= 0) {
+			send(to, from, subject, text);
+		} else {
+			var key = name + "/" + kind;
+
+			if(typeof pendingNotifications[key] === 'undefined') {
+				pendingNotifications[key] = {
+					subject: subject,
+					text:    text,
+					count:   0
+				};
+				setTimeout(function() {
+					var ct = pendingNotifications[key].count;
+					var text = "Event occurred " + ct + " times in the last "
+					         + CONFIG.notify_limit + " seconds\n\n"
+					         + pendingNotifications[key].text;
+					var subject = pendingNotifications[key].subject + " (" + ct + " times)";
+					send(to, from, subject, text);
+
+					delete pendingNotifications[key];
+				}, CONFIG.notify_limit * 1000);
 			}
-		});
+
+			pendingNotifications[key].count++;
+		}
 	}
 
 	/**
