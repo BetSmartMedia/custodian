@@ -175,7 +175,7 @@ function run(CONFIG, STATE) {
 		Object.keys(CONFIG.watch).forEach(function(name) {
 			var config = CONFIG.watch[name]
 				, state  = STATE.watch[name];
-				
+
 			// If job is running
 			if(state.process) {
 				if(config.mem_limit) checkMemoryUsage(name, config.mem_limit, state.process.pid);
